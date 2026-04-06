@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 from types import MethodType
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 
 import numpy as np
 import tkinter as tk
@@ -13,12 +13,11 @@ from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-try:
-    import serial
-    import serial.tools.list_ports
-except ImportError:
-    serial = None  # type: ignore[assignment]
-
+from services.measurement_orchestrator import (
+    MeasurementOrchestrator,
+    MeasurementOrchestratorCallbacks,
+    MeasurementOrchestratorConfig,
+)
 from .ui_utils import ScrollableFrame, bind_debounced_configure
 
 LOGGER = logging.getLogger(__name__)
@@ -30,14 +29,6 @@ def build(app):
     
     # Import constants from app
     DEFAULT_ALL_LASERS = app.DEFAULT_ALL_LASERS
-    OBIS_LASER_MAP = {
-        "405": 5,
-        "445": 4,
-        "488": 3,
-        "640": 2,
-        "685": 6,
-    }
-
     def _add_reference_csv(app):
         """Add reference CSV files for analysis (supports multiple selection)."""
         try:
@@ -578,8 +569,11 @@ def build(app):
         except (ValueError, AttributeError):
             start_it_override = None
 
+        app._update_ports_from_ui()
+        power_snapshot = {tag: float(app._get_power(tag)) for tag in app.measure_vars.keys()}
+
         # Clear previous data
-        app.data.rows.clear()
+        app.data.clear()
         
         # Clear analysis window when new measurement starts
         app.after(0, lambda: app._clear_analysis_window())
@@ -589,14 +583,72 @@ def build(app):
 
         app.measure_running.set()
         app.measure_thread = threading.Thread(
-            target=run_measurement_with_analysis, args=(tags, start_it_override), daemon=True)
+            target=run_measurement_with_analysis,
+            args=(tags, start_it_override, power_snapshot),
+            daemon=True,
+        )
         app.measure_thread.start()
 
-    def run_measurement_with_analysis(tags, start_it_override):
+    def _show_countdown_modal_threadsafe(seconds: int, title: str, message: str):
+        done = threading.Event()
+        state = {"error": None}
+
+        def _show():
+            try:
+                app._countdown_modal(seconds, title, message)
+            except Exception as exc:  # pragma: no cover - UI error path
+                state["error"] = exc
+            finally:
+                done.set()
+
+        app.after(0, _show)
+        done.wait()
+        if state["error"] is not None:
+            raise state["error"]
+
+    def _build_measurement_orchestrator(power_snapshot: Dict[str, float]):
+        config = MeasurementOrchestratorConfig(
+            default_start_it=app.DEFAULT_START_IT,
+            target_low=app.TARGET_LOW,
+            target_high=app.TARGET_HIGH,
+            target_mid=app.TARGET_MID,
+            it_min=app.IT_MIN,
+            it_max=app.IT_MAX,
+            it_step_up=app.IT_STEP_UP,
+            it_step_down=app.IT_STEP_DOWN,
+            max_it_adjust_iters=app.MAX_IT_ADJUST_ITERS,
+            sat_thresh=app.SAT_THRESH,
+            n_sig=app.N_SIG,
+            n_dark=app.N_DARK,
+            n_sig_640=app.N_SIG_640,
+            n_dark_640=app.N_DARK_640,
+        )
+        callbacks = MeasurementOrchestratorCallbacks(
+            prepare_devices=lambda: None,
+            power_lookup=lambda tag: power_snapshot.get(tag, 0.0),
+            auto_it_update=lambda tag, spectrum, it_ms, peak: app._update_auto_it_plot(tag, spectrum, it_ms, peak),
+            measurement_completed=lambda tag: app._update_last_plots(tag),
+            countdown=_show_countdown_modal_threadsafe,
+            error_handler=app._post_error,
+        )
+        return MeasurementOrchestrator(
+            spectrometer=app.spec,
+            laser_controller=app.lasers,
+            measurement_data=app.data,
+            config=config,
+            callbacks=callbacks,
+            it_history=app.it_history,
+        )
+
+    def run_measurement_with_analysis(tags, start_it_override, power_snapshot):
         """Run measurement sequence and automatically generate analysis."""
         try:
-            # Run the measurement sequence
-            app._measure_sequence_thread(tags, start_it_override)
+            orchestrator = _build_measurement_orchestrator(power_snapshot)
+            run_result = orchestrator.run(
+                tags,
+                start_it_override,
+                should_continue=app.measure_running.is_set,
+            )
 
             # Save data to CSV
             csv_path = app.save_measurement_data()
@@ -606,16 +658,24 @@ def build(app):
                 app.after(0, app.refresh_analysis_view)
 
                 # Show completion message
+                status_label = "Measurement and analysis complete!"
+                if run_result.stopped_early:
+                    status_label = "Measurement stopped early; saved partial results."
+                if run_result.errors:
+                    status_label += f"\n\nCompleted with {len(run_result.errors)} warning(s)."
                 app.after(0, lambda: messagebox.showinfo(
                     "Measurement Complete",
-                    f"Measurement and analysis complete!\n\n"
+                    f"{status_label}\n\n"
                     f"Data saved to: {os.path.basename(csv_path)}\n"
                     f"Generated {len(plot_paths)} analysis plots.\n\n"
                     f"Check the Analysis tab for results."
                 ))
+            elif run_result.stopped_early:
+                app.after(0, lambda: messagebox.showinfo("Measurement", "Measurement stopped before any data was saved."))
         except Exception as e:
             app._post_error("Measurement", e)
         finally:
+            app.measure_running.clear()
             # Change button back to green (idle state)
             app.after(0, lambda: app.run_all_btn.configure(bg='#90EE90', activebackground='#7CCD7C'))
 
@@ -623,246 +683,6 @@ def build(app):
         app.measure_running.clear()
         # Change button back to green (idle state)
         app.run_all_btn.configure(bg='#90EE90', activebackground='#7CCD7C')
-
-    def _measure_sequence_thread(self, laser_tags: List[str], start_it_override: Optional[float]):
-        # Make sure ports reflect UI and are open for the run
-        try:
-            app._update_ports_from_ui()
-            app.lasers.open_all()
-        except Exception as e:
-            app._post_error("Ports", e)
-            app.measure_running.clear()
-            return
-
-        # Ensure everything OFF initially (auto-opens as needed)
-        try:
-            for ch in OBIS_LASER_MAP.values():
-                try: app.lasers.obis_off(ch)
-                except Exception: pass
-            app.lasers.cube_off()
-            app.lasers.relay_off(1)  # 532
-            app.lasers.relay_off(2)  # Hg-Ar
-            app.lasers.relay_off(3)  # 517
-        except Exception:
-            pass
-
-        main_tags = [t for t in laser_tags if t != "640"]
-        do_640 = "640" in laser_tags
-
-        for tag in main_tags:
-            if not app.measure_running.is_set():
-                break
-            try:
-                app._run_single_measurement(tag, start_it_override)
-            except Exception as e:
-                app._post_error(f"Measurement {tag}", e)
-
-        if do_640 and app.measure_running.is_set():
-            try:
-                app._run_640_measurement()
-            except Exception as e:
-                app._post_error("640 nm Measurement", e)
-
-        # Turn all off at the end
-        try:
-            for ch in OBIS_LASER_MAP.values():
-                try: app.lasers.obis_off(ch)
-                except Exception: pass
-            app.lasers.cube_off()
-            app.lasers.relay_off(1)
-            app.lasers.relay_off(2)
-            app.lasers.relay_off(3)
-        except Exception:
-            pass
-
-        try:
-            app._finalize_measurement_run()
-        except Exception as e:
-            app._post_error("Finalize Measurements", e)
-
-        app.measure_running.clear()
-
-    def _auto_adjust_it(self, start_it: float, tag: str) -> Tuple[float, float]:
-        it_ms = max(app.IT_MIN, min(app.IT_MAX, start_it))
-        peak = np.nan
-        iters = 0
-        app.it_history = []
-
-        def keep_running() -> bool:
-            return not hasattr(app, "measure_running") or app.measure_running.is_set()
-
-        while iters <= app.MAX_IT_ADJUST_ITERS and keep_running():
-            app.spec.set_it(it_ms)
-            app.spec.measure(ncy=1)
-            app.spec.wait_for_measurement()
-            raw = getattr(app.spec, "rcm", None)
-            if raw is None:
-                iters += 1
-                continue
-            y = np.array(raw, dtype=float)
-            if y.size == 0 or not np.any(np.isfinite(y)):
-                iters += 1
-                continue
-
-            peak = float(np.nanmax(y))
-            if not np.isfinite(peak):
-                iters += 1
-                continue
-            app.it_history.append((it_ms, peak))
-            app.after(0, lambda arr=y.copy(), it_val=it_ms, pk=peak, tg=tag: app._update_auto_it_plot(tg, arr, it_val, pk))
-
-            if peak >= app.SAT_THRESH:
-                it_ms = max(app.IT_MIN, it_ms * 0.7)
-                iters += 1
-                continue
-
-            if app.TARGET_LOW <= peak <= app.TARGET_HIGH:
-                return it_ms, peak
-
-            err = app.TARGET_MID - peak
-            if err > 0:
-                delta = min(app.IT_STEP_UP, max(0.05, abs(err) / 5000.0))
-                it_ms = min(app.IT_MAX, it_ms + delta)
-            else:
-                delta = min(app.IT_STEP_DOWN, max(0.05, abs(err) / 5000.0))
-                it_ms = max(app.IT_MIN, it_ms - delta)
-
-            iters += 1
-
-        return it_ms, peak
-
-
-    def _ensure_source_state(self, tag: str, turn_on: bool):
-        """Turn on/off source described by tag with port auto-open."""
-        # ensure correct device port is open
-        app.lasers.ensure_open_for_tag(tag)
-
-        if tag in OBIS_LASER_MAP:
-            ch = OBIS_LASER_MAP[tag]
-            if turn_on:
-                pwr = float(app._get_power(tag))
-                app.lasers.obis_set_power(ch, pwr)
-                app.lasers.obis_on(ch)
-            else:
-                app.lasers.obis_off(ch)
-
-        elif tag == "377":
-            if turn_on:
-                val = float(app._get_power(tag))
-                mw = val * 1000.0 if val <= 0.3 else val
-                app.lasers.cube_on(power_mw=mw)
-            else:
-                app.lasers.cube_off()
-
-        elif tag == "517":
-            if turn_on: app.lasers.relay_on(2)
-            else:       app.lasers.relay_off(2)
-
-        elif tag == "532":
-            if turn_on: app.lasers.relay_on(1)
-            else:       app.lasers.relay_off(1)
-
-        elif tag == "Hg_Ar":
-            if turn_on:
-                app._countdown_modal(45, "Fiber Switch", "Switch the fiber to Hg-Ar and press Enter to skip.")
-                app.lasers.relay_on(4)
-            else:
-                app.lasers.relay_off(4)
-
-
-
-    def _run_single_measurement(self, tag: str, start_it_override: Optional[float]):
-        # Turn on only the requested tag; others off
-        for k in ["377", "517", "532", "Hg_Ar"]:
-            if k != tag:
-                try:
-                    app._ensure_source_state(k, False)
-                except Exception:
-                    pass
-        for k, ch in OBIS_LASER_MAP.items():
-            if k != tag:
-                try: app.lasers.obis_off(ch)
-                except Exception: pass
-
-        # Use the same pattern as toggle_laser - update ports, ensure open, then turn on
-        app._update_ports_from_ui()
-        app._ensure_source_state(tag, True)
-        
-        # Special stabilization delay for 377 nm CUBE laser (needs 3 seconds)
-        if tag == "377":
-            time.sleep(3.0)  # CUBE laser needs time to stabilize
-        else:
-            time.sleep(0.2)  # Standard delay for other lasers
-
-        # pick start IT
-        start_it = start_it_override if start_it_override is not None else app.DEFAULT_START_IT.get(tag, app.DEFAULT_START_IT["default"])
-        # Auto-IT
-        it_ms, peak = app._auto_adjust_it(start_it, tag)
-
-        if app.TARGET_LOW <= peak <= app.TARGET_HIGH:
-            # Signal
-            app.spec.set_it(it_ms)
-            app.spec.measure(ncy=app.N_SIG)
-            app.spec.wait_for_measurement()
-            y_signal = np.array(app.spec.rcm, dtype=float)
-
-            # Turn OFF tag
-            app._ensure_source_state(tag, False)
-
-            # Dark
-            time.sleep(0.3)
-            app.spec.set_it(it_ms)
-            app.spec.measure(ncy=app.N_DARK)
-            app.spec.wait_for_measurement()
-            y_dark = np.array(app.spec.rcm, dtype=float)
-
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            app.data.rows.append([now, tag, it_ms, app.N_SIG] + y_signal.tolist())
-            app.data.rows.append([now, f"{tag}_dark", it_ms, app.N_DARK] + y_dark.tolist())
-
-            app._update_last_plots(tag)
-        else:
-            # could not reach target -> just turn off
-            app._ensure_source_state(tag, False)
-
-    def _run_640_measurement():
-        if not app.measure_running.is_set():
-            return
-
-        integration_times = [100.0, 500.0, 1000.0]
-
-        try:
-            app._ensure_source_state("640", True)
-            time.sleep(1.0)
-
-            for it_ms in integration_times:
-                if not app.measure_running.is_set():
-                    break
-                app.spec.set_it(it_ms)
-                app.spec.measure(ncy=app.N_SIG_640)
-                app.spec.wait_for_measurement()
-                y = np.array(app.spec.rcm, dtype=float)
-                peak = float(np.nanmax(y)) if y.size else 0.0
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                app.data.rows.append([now, "640", it_ms, app.N_SIG_640] + y.tolist())
-                app.after(0, lambda arr=y.copy(), it_val=it_ms, pk=peak: app._update_auto_it_plot("640", arr, it_val, pk))
-
-            app._ensure_source_state("640", False)
-            time.sleep(0.3)
-
-            for it_ms in integration_times:
-                if not app.measure_running.is_set():
-                    break
-                app.spec.set_it(it_ms)
-                app.spec.measure(ncy=app.N_DARK_640)
-                app.spec.wait_for_measurement()
-                y_dark = np.array(app.spec.rcm, dtype=float)
-                now_dark = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                app.data.rows.append([now_dark, "640_dark", it_ms, app.N_DARK_640] + y_dark.tolist())
-        finally:
-            app._ensure_source_state("640", False)
-
-        app._update_last_plots("640")
 
     def _countdown_modal(self, seconds: int, title: str, message: str):
         """Blocking modal with countdown; Enter key to skip."""
@@ -888,22 +708,31 @@ def build(app):
 
     def _update_last_plots(self, tag: str):
         sig, dark = app.data.last_vectors_for(tag)
+        app._pending_measurement_plot = (sig, dark)
+        if getattr(app, "_measurement_plot_redraw_id", None) is not None:
+            return
+
         CLAMP = 65000  # counts ceiling for display
 
         def update():
+            app._measurement_plot_redraw_id = None
+            pending = getattr(app, "_pending_measurement_plot", None)
+            if pending is None:
+                return
+            sig_pending, dark_pending = pending
             # main overlay
             xmax = 10
             any_sat = False
 
-            if sig is not None:
-                xs = np.arange(len(sig))
-                sig_sat = np.any(sig > CLAMP)
-                sig_display = np.clip(sig, None, CLAMP)
+            if sig_pending is not None:
+                xs = np.arange(len(sig_pending))
+                sig_sat = np.any(sig_pending > CLAMP)
+                sig_display = np.clip(sig_pending, None, CLAMP)
                 app.meas_sig_line.set_data(xs, sig_display)
-                xmax = max(xmax, len(sig)-1)
+                xmax = max(xmax, len(sig_pending)-1)
                 if sig_sat:
                     any_sat = True
-                    y_sat = np.where(sig > CLAMP, CLAMP, np.nan)
+                    y_sat = np.where(sig_pending > CLAMP, CLAMP, np.nan)
                     app.meas_sig_sat_line.set_data(xs, y_sat)
                     app.meas_sig_sat_line.set_visible(True)
                 else:
@@ -911,15 +740,15 @@ def build(app):
             else:
                 app.meas_sig_sat_line.set_visible(False)
 
-            if dark is not None:
-                xd = np.arange(len(dark))
-                dark_sat = np.any(dark > CLAMP)
-                dark_display = np.clip(dark, None, CLAMP)
+            if dark_pending is not None:
+                xd = np.arange(len(dark_pending))
+                dark_sat = np.any(dark_pending > CLAMP)
+                dark_display = np.clip(dark_pending, None, CLAMP)
                 app.meas_dark_line.set_data(xd, dark_display)
-                xmax = max(xmax, len(dark)-1)
+                xmax = max(xmax, len(dark_pending)-1)
                 if dark_sat:
                     any_sat = True
-                    y_sat = np.where(dark > CLAMP, CLAMP, np.nan)
+                    y_sat = np.where(dark_pending > CLAMP, CLAMP, np.nan)
                     app.meas_dark_sat_line.set_data(xd, y_sat)
                     app.meas_dark_sat_line.set_visible(True)
                 else:
@@ -961,7 +790,7 @@ def build(app):
 
             app.meas_canvas.draw_idle()
 
-        app.after(0, update)
+        app._measurement_plot_redraw_id = app.after(16, update)
 
 
     def save_csv():
@@ -987,11 +816,6 @@ def build(app):
     app.run_all_selected = run_all_selected
     app.stop_measure = stop_measure
     app.save_csv = save_csv
-    app._measure_sequence_thread = MethodType(_measure_sequence_thread, app)
-    app._auto_adjust_it = MethodType(_auto_adjust_it, app)
-    app._ensure_source_state = MethodType(_ensure_source_state, app)
-    app._run_single_measurement = MethodType(_run_single_measurement, app)
-    app._run_640_measurement = _run_640_measurement
     app._countdown_modal = MethodType(_countdown_modal, app)
     app._update_last_plots = MethodType(_update_last_plots, app)
 

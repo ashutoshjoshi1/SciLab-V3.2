@@ -27,21 +27,14 @@ try:
 except Exception:  # pragma: no cover - runtime dependency on target machine
     serial = None
 
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-
 try:
-    from characterization_analysis import (
-        AnalysisArtifact,
-        CharacterizationConfig,
-        CharacterizationResult,
-        perform_characterization,
-    )
+    from PIL import Image, ImageTk
 except Exception:  # pragma: no cover
-    AnalysisArtifact = None
-    CharacterizationConfig = None
-    CharacterizationResult = None
-    perform_characterization = None
+    Image = None
+    ImageTk = None
+
+from domain.measurement import MeasurementData
+from services.analysis_service import AnalysisService
 
 try:
     from stage.stage_controller import StageController
@@ -232,52 +225,6 @@ class HardwareState:
     spectrometer_type: str = "Auto"
     com_ports: Dict[str, str] = field(default_factory=dict)
     laser_power: Dict[str, float] = field(default_factory=dict)
-
-
-class MeasurementData:
-    def __init__(self, npix: int = 2048, serial_number: str = "Unknown"):
-        self.npix = int(npix)
-        self.serial_number = serial_number
-        self.rows: List[List[float]] = []
-
-    def clear(self) -> None:
-        self.rows.clear()
-
-    def to_dataframe(self):
-        if pd is None:
-            raise RuntimeError("pandas is required to save measurement data.")
-
-        columns = ["Timestamp", "Wavelength", "IntegrationTime", "NumCycles"] + [
-            f"Pixel_{idx}" for idx in range(int(self.npix))
-        ]
-
-        normalized_rows = []
-        for row in self.rows:
-            row_values = list(row)
-            if len(row_values) < len(columns):
-                row_values.extend([np.nan] * (len(columns) - len(row_values)))
-            elif len(row_values) > len(columns):
-                row_values = row_values[: len(columns)]
-            normalized_rows.append(row_values)
-
-        return pd.DataFrame(normalized_rows, columns=columns)
-
-    def last_vectors_for(self, tag: str):
-        signal = None
-        dark = None
-        dark_tag = f"{tag}_dark"
-
-        for row in reversed(self.rows):
-            wavelength = str(row[1])
-            values = np.asarray(row[4:], dtype=float)
-            if signal is None and wavelength == str(tag):
-                signal = values
-            elif dark is None and wavelength == dark_tag:
-                dark = values
-            if signal is not None and dark is not None:
-                break
-
-        return signal, dark
 
 
 class SerialDevice:
@@ -610,6 +557,7 @@ class SpectroApp(tk.Tk):
             com_ports=dict(self.DEFAULT_COM_PORTS),
             laser_power=dict(self.DEFAULT_LASER_POWERS),
         )
+        self.analysis_service = AnalysisService()
         self.data = MeasurementData(npix=self.npix, serial_number=self.sn)
         self.available_lasers = list(self.DEFAULT_ALL_LASERS)
         self.laser_configs = self._build_default_laser_configs()
@@ -625,6 +573,10 @@ class SpectroApp(tk.Tk):
         self._pending_it = None
         self._it_updating = False
         self.it_history: List[Tuple[float, float]] = []
+        self._pending_live_plot = None
+        self._live_plot_redraw_id = None
+        self._pending_measurement_plot = None
+        self._measurement_plot_redraw_id = None
 
         self.analysis_artifacts: List = []
         self.analysis_summary_lines: List[str] = []
@@ -635,6 +587,9 @@ class SpectroApp(tk.Tk):
         self._latest_csv_path: Optional[Path] = None
         self._latest_results_timestamp: Optional[str] = None
         self._analysis_images: List[object] = []
+        self._analysis_metrics = None
+        self._auto_it_redraw_id = None
+        self._pending_auto_it_plot = None
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="both", expand=True)
@@ -729,6 +684,7 @@ class SpectroApp(tk.Tk):
         self.analysis_artifacts = []
         self.analysis_summary_lines = []
         self._analysis_images = []
+        self._analysis_metrics = None
         self._latest_results_dir = None
         self._latest_csv_path = None
         self._latest_results_timestamp = None
@@ -758,17 +714,10 @@ class SpectroApp(tk.Tk):
         self._latest_csv_path = path
         return str(path)
 
-    def _figure_to_artifact(self, title: str, figure: Figure, output_path: Path) -> Dict[str, object]:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(output_path, dpi=150, bbox_inches="tight")
-        return {"title": title, "figure": figure, "path": str(output_path)}
-
     def run_analysis_and_save_plots(self, csv_path: Optional[str] = None):
-        """Run comprehensive analysis using perform_characterization and save all plots."""
+        """Run comprehensive analysis using the analysis service and save all plots."""
         if pd is None:
             raise RuntimeError("pandas is required to run analysis.")
-        if perform_characterization is None:
-            raise RuntimeError("characterization_analysis module is required for analysis.")
 
         if csv_path:
             df = pd.read_csv(csv_path)
@@ -796,20 +745,26 @@ class SpectroApp(tk.Tk):
 
         reference_csv_paths = getattr(self, "reference_csv_paths", [])
 
-        LOGGER.info("Starting comprehensive analysis via perform_characterization...")
+        LOGGER.info("Starting comprehensive analysis via AnalysisService...")
         try:
-            result = perform_characterization(
-                df, sn, str(plots_dir), timestamp, None, reference_csv_paths or None
+            result = self.analysis_service.analyze(
+                df=df,
+                serial_number=sn,
+                output_dir=str(plots_dir),
+                timestamp=timestamp,
+                reference_csv_paths=reference_csv_paths or None,
             )
         except Exception as exc:
-            LOGGER.exception("perform_characterization raised an exception")
+            LOGGER.exception("AnalysisService raised an exception")
             self.analysis_artifacts = []
             self.analysis_summary_lines = [f"Analysis error: {exc}"]
+            self._analysis_metrics = None
             self._latest_results_timestamp = timestamp
             return []
 
         self.analysis_artifacts = result.artifacts if result else []
         self.analysis_summary_lines = result.summary_lines if result else []
+        self._analysis_metrics = result.metrics if result else None
         self._latest_results_timestamp = timestamp
 
         if hasattr(self, "export_plots_btn"):
@@ -822,7 +777,7 @@ class SpectroApp(tk.Tk):
         return paths
 
     def refresh_analysis_view(self):
-        """Add a new run tab to the analysis notebook with all plots from the latest analysis."""
+        """Add a new run tab to the analysis notebook with saved plot previews."""
         if not self.analysis_artifacts:
             if self._latest_csv_path and Path(self._latest_csv_path).is_file():
                 self.run_analysis_and_save_plots(str(self._latest_csv_path))
@@ -885,47 +840,45 @@ class SpectroApp(tk.Tk):
         # Arrange plots in a 2-column grid
         num_plots = len(self.analysis_artifacts)
         cols = 2 if num_plots > 1 else 1
+        tab_images = []
 
         for idx, artifact in enumerate(self.analysis_artifacts):
             row = idx // cols
             col = idx % cols
 
             art_name = getattr(artifact, "name", f"Plot {idx + 1}")
-            art_fig = getattr(artifact, "figure", None)
-            if art_fig is None:
-                continue
+            art_path = Path(str(getattr(artifact, "path", "")))
 
             plot_frame = ttk.LabelFrame(scrollable_frame, text=art_name, padding=12)
             plot_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
 
-            try:
-                art_fig.set_size_inches(8, 6)
-                art_fig.set_dpi(100)
-                art_fig.tight_layout(pad=1.5)
-                for ax in art_fig.get_axes():
-                    ax.grid(True, alpha=0.2, linestyle="--", linewidth=0.5)
-                art_fig.patch.set_facecolor("white")
-            except Exception:
-                pass
+            actions_frame = ttk.Frame(plot_frame)
+            actions_frame.pack(fill="x", pady=(0, 6))
+            ttk.Label(
+                actions_frame,
+                text=art_path.name if art_path.name else "Plot file unavailable",
+                foreground="#6c757d",
+            ).pack(side="left")
+            ttk.Button(
+                actions_frame,
+                text="Open Image",
+                command=lambda p=art_path: self._open_path_with_default_app(p, "Analysis Plot"),
+                width=12,
+            ).pack(side="right")
 
-            try:
-                fig_canvas = FigureCanvasTkAgg(art_fig, master=plot_frame)
-                fig_canvas.draw()
-                canvas_widget = fig_canvas.get_tk_widget()
-                canvas_widget.configure(highlightthickness=0)
-                canvas_widget.pack(fill="both", expand=True, padx=5, pady=5)
-            except Exception:
-                ttk.Label(plot_frame, text="Plot rendering failed.",
-                          foreground="red").pack(padx=5, pady=5)
-                continue
+            preview_label = ttk.Label(plot_frame, text="Preview unavailable", anchor="center")
+            preview_label.pack(fill="both", expand=True, padx=5, pady=5)
 
-            try:
-                toolbar_frame = ttk.Frame(plot_frame)
-                toolbar_frame.pack(fill="x", padx=5, pady=(0, 5))
-                toolbar = NavigationToolbar2Tk(fig_canvas, toolbar_frame)
-                toolbar.update()
-            except Exception:
-                pass
+            preview = self._build_analysis_preview_image(art_path)
+            if preview is not None:
+                preview_label.configure(image=preview, text="")
+                preview_label.image = preview
+                preview_label.bind("<Button-1>", lambda _event, p=art_path: self._open_path_with_default_app(p, "Analysis Plot"))
+                tab_images.append(preview)
+            elif art_path.is_file():
+                preview_label.configure(text=f"Saved plot:\n{art_path.name}")
+            else:
+                preview_label.configure(text="Plot file missing.")
 
         for c in range(cols):
             scrollable_frame.grid_columnconfigure(c, weight=1, uniform="plots")
@@ -950,6 +903,7 @@ class SpectroApp(tk.Tk):
             "tab": measurement_tab,
             "timestamp": timestamp,
             "csv_path": str(self._latest_csv_path) if self._latest_csv_path else None,
+            "images": tab_images,
         }
 
         if hasattr(self, "export_plots_btn"):
@@ -1009,44 +963,75 @@ class SpectroApp(tk.Tk):
         if not str(folder).startswith(str(results_root)):
             messagebox.showerror("Results Folder", "Path is outside the results directory.")
             return
+        self._open_path_with_default_app(folder, "Results Folder")
+
+    def _build_analysis_preview_image(self, image_path: Path):
+        if Image is None or ImageTk is None or not image_path.is_file():
+            return None
+        try:
+            with Image.open(image_path) as raw_image:
+                preview = raw_image.copy()
+            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+            preview.thumbnail((720, 440), resampling)
+            return ImageTk.PhotoImage(preview)
+        except Exception:
+            LOGGER.exception("Unable to build analysis preview for %s", image_path)
+            return None
+
+    def _open_path_with_default_app(self, path: Path, title: str) -> None:
+        if not path.exists():
+            messagebox.showwarning(title, f"Path not found:\n{path}")
+            return
         try:
             if sys.platform.startswith("win"):
-                os.startfile(str(folder))  # type: ignore[attr-defined]
+                os.startfile(str(path))  # type: ignore[attr-defined]
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "--", str(folder)])  # noqa: S603
+                subprocess.Popen(["open", "--", str(path)])  # noqa: S603
             else:
-                subprocess.Popen(["xdg-open", "--", str(folder)])  # noqa: S603
+                subprocess.Popen(["xdg-open", "--", str(path)])  # noqa: S603
         except Exception as exc:
-            self._post_error("Open Results Folder", exc)
+            self._post_error(title, exc)
 
     def _update_auto_it_plot(self, tag, spectrum, it_ms, peak):
-        """Update measurement plot during Auto-IT adjustment (called from UI thread)."""
-        try:
-            xs = np.arange(len(spectrum))
-            self.meas_sig_line.set_data(xs, spectrum)
-            self.meas_ax.set_xlim(0, max(10, len(spectrum) - 1))
-            self.meas_ax.set_ylim(0, 65000)
-            self.meas_ax.set_title(
-                f"Auto-IT: {tag} nm | IT={it_ms:.2f} ms | Peak={peak:.0f}",
-                fontsize=13, fontweight="bold", pad=8,
-            )
+        """Update measurement plot during Auto-IT adjustment without flooding the UI thread."""
+        self._pending_auto_it_plot = (str(tag), np.asarray(spectrum, dtype=float), float(it_ms), float(peak))
+        if self._auto_it_redraw_id is not None:
+            return
 
-            steps = list(getattr(self, "it_history", []))
-            if steps:
-                st = np.arange(len(steps))
-                peaks = [p for (_, p) in steps]
-                its = [it for (it, _) in steps]
-                self.inset_peak_line.set_data(st, peaks)
-                self.inset_it_line.set_data(st, its)
-                self.meas_inset.set_xlim(-0.5, max(0.5, len(st) - 0.5))
-                self.meas_inset.relim()
-                self.meas_inset.autoscale_view()
-                self.meas_inset2.relim()
-                self.meas_inset2.autoscale_view()
+        def _flush_auto_it_plot():
+            self._auto_it_redraw_id = None
+            pending = self._pending_auto_it_plot
+            if pending is None:
+                return
+            plot_tag, plot_spectrum, plot_it_ms, plot_peak = pending
+            try:
+                xs = np.arange(len(plot_spectrum))
+                self.meas_sig_line.set_data(xs, plot_spectrum)
+                self.meas_ax.set_xlim(0, max(10, len(plot_spectrum) - 1))
+                self.meas_ax.set_ylim(0, 65000)
+                self.meas_ax.set_title(
+                    f"Auto-IT: {plot_tag} nm | IT={plot_it_ms:.2f} ms | Peak={plot_peak:.0f}",
+                    fontsize=13, fontweight="bold", pad=8,
+                )
 
-            self.meas_canvas.draw_idle()
-        except Exception:
-            LOGGER.debug("Auto-IT plot update skipped (UI not ready)")
+                steps = list(getattr(self, "it_history", []))
+                if steps:
+                    st = np.arange(len(steps))
+                    peaks = [value for (_, value) in steps]
+                    its = [value for (value, _) in steps]
+                    self.inset_peak_line.set_data(st, peaks)
+                    self.inset_it_line.set_data(st, its)
+                    self.meas_inset.set_xlim(-0.5, max(0.5, len(st) - 0.5))
+                    self.meas_inset.relim()
+                    self.meas_inset.autoscale_view()
+                    self.meas_inset2.relim()
+                    self.meas_inset2.autoscale_view()
+
+                self.meas_canvas.draw_idle()
+            except Exception:
+                LOGGER.debug("Auto-IT plot update skipped (UI not ready)")
+
+        self._auto_it_redraw_id = self.after(16, _flush_auto_it_plot)
 
     def _finalize_measurement_run(self):
         return None

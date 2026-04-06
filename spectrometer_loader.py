@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from domain.spectrometer import assert_spectrometer_backend
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -322,7 +324,7 @@ def connect_spectrometer(
             if res != "OK":
                 raise RuntimeError(res)
             spec.spec_type = candidate
-            return candidate, spec
+            return candidate, assert_spectrometer_backend(spec)
         except Exception as exc:
             last_error = exc
             LOGGER.exception("Unable to connect %s spectrometer", candidate)

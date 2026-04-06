@@ -711,39 +711,45 @@ def build(app):
 
 
     def _update_live_plot(self, x, y):
+        app._pending_live_plot = (np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+        if getattr(app, "_live_plot_redraw_id", None) is not None:
+            return
+
         CLAMP = 65000  # counts ceiling for display
 
         def update():
-            saturated = np.any(y > CLAMP)
-            y_display = np.clip(y, None, CLAMP)
-            app.live_line.set_data(x, y_display)
+            app._live_plot_redraw_id = None
+            pending = getattr(app, "_pending_live_plot", None)
+            if pending is None:
+                return
+            x_values, y_values = pending
+            saturated = np.any(y_values > CLAMP)
+            y_display = np.clip(y_values, None, CLAMP)
+            app.live_line.set_data(x_values, y_display)
 
             if saturated:
-                # Build masked array: NaN where NOT saturated so only
-                # the saturated segments are drawn in red.
-                y_sat = np.where(y > CLAMP, CLAMP, np.nan)
-                app.live_sat_line.set_data(x, y_sat)
+                y_sat = np.where(y_values > CLAMP, CLAMP, np.nan)
+                app.live_sat_line.set_data(x_values, y_sat)
                 app.live_sat_line.set_visible(True)
                 app.live_line.set_color("#1f77b4")
             else:
                 app.live_sat_line.set_visible(False)
                 app.live_line.set_color("#1f77b4")
 
-            # Update title with serial number if connected
             sn = getattr(app, 'sn', None)
             title = f"Live Spectrum - Serial Number: {sn}" if app.spec and sn else "Live Spectrum"
             if saturated:
                 title += "  [SATURATED]"
             app.live_ax.set_title(title, color="red" if saturated else "black")
 
-            # Only adjust limits when NOT locked
             if not app.live_limits_locked:
-                app.live_ax.set_xlim(0, max(10, len(x)-1))
+                app.live_ax.set_xlim(0, max(10, len(x_values)-1))
                 ymax = float(np.nanmax(y_display)) if y_display.size else 1.0
                 app.live_ax.set_ylim(0, max(1000, ymax * 1.1))
 
             app.live_fig.canvas.draw_idle()
-        app.after(0, update)
+
+        app._live_plot_redraw_id = app.after(16, update)
 
 
     def toggle_laser(self, tag: str, turn_on: bool):
