@@ -1,374 +1,313 @@
-# All Spec Laser Control System Design Document
+# All Spec Laser Control System Design
 
-Document status: Draft 1.0  
+Status: Revision 1.1  
 Date: 2026-04-06  
-Authoring basis: Static architecture review of the current repository
+Author: Ashutosh Joshi
 
-## 1. Purpose and Scope
+## Overview
 
-This document describes the current system design of the All Spec Laser Control application and proposes a target-state architecture for improving maintainability, testability, and operational robustness.
+This document describes the architecture that is now in the repository after the April 2026 refactor. It is meant to be practical. The goal is not to describe an idealized future system. The goal is to help the next engineer understand how the application is put together today, why a few structural changes were made, and where the remaining pressure points still are.
 
-The document covers:
+All Spec Laser Control is still a desktop lab application built with Python and Tkinter. That has not changed, and it should not be treated as a problem in itself. The software needs to live on a workstation next to the hardware, work offline, and stay usable for operators who are running setup, acquisition, analysis, and maintenance in one place.
 
-- Desktop application structure
-- Hardware integration boundaries
-- Runtime workflows for live view, measurement, analysis, EEPROM, and stage control
-- Persistence model and file outputs
-- Deployment assumptions and platform constraints
-- Key architectural risks and recommended refactors
+What did change is the shape of the code underneath the UI:
 
-This review is based on the current codebase and does not assume live hardware validation during authoring.
+- The spectrometer backends now have a formal contract.
+- The measurement sequence is no longer buried inside the Measurements tab.
+- Analysis calculations are now separated from plot rendering and from UI presentation.
+- The GUI does less work per frame, especially in Live View, Auto-IT, and the Analysis tab.
 
-## 2. Executive Summary
+## What The Application Does
 
-All Spec Laser Control is a Python/Tkinter desktop application used to configure spectrometers, control supporting lab hardware, execute automated characterization runs, and generate analysis artifacts. The current architecture is best described as a modular desktop monolith with plugin-style hardware backends.
+At a high level, the application handles a fairly specific lab workflow:
 
-The design has several strengths:
+- Discover and connect to one of several supported spectrometer families
+- Control external light sources over serial
+- Capture live spectra
+- Run automated characterization measurements across selected sources
+- Save raw measurement data to disk
+- Generate analysis outputs and plots for the run
+- Provide EEPROM and stage-control utilities where supported
 
-- Clear operator-facing workflow across Setup, Live View, Measurements, Analysis, and EEPROM tabs
-- Practical hardware abstraction for multiple spectrometer families
-- Good use of background threads for long-running measurement and motion workflows
-- Strong offline capability with local CSV and plot generation
+That workflow is still exposed through the same operator-facing tabs:
 
-The main architectural risks are:
+- Setup
+- Live View
+- Measurements
+- Analysis
+- EEPROM
 
-- Core orchestration logic is concentrated in large modules and a large `SpectroApp` application shell
-- Hardware, orchestration, persistence, and UI concerns are partially mixed
-- Spectrometer backends share an implicit interface rather than a formal contract
-- Error handling and observability are adequate for operator use, but limited for diagnostics and automated validation
+## What Changed In This Revision
 
-The recommended next step is not a full rewrite. The correct path is to preserve the desktop monolith deployment model while refactoring internally toward a layered application with explicit service boundaries and formal device adapter contracts.
+The refactor in this revision was aimed at reducing coupling without disturbing the operator workflow.
 
-## 3. System Overview
+### 1. Spectrometer backend interface was formalized
 
-### 3.1 Primary Business Function
+The codebase used to rely on a shared, unwritten convention across spectrometer backends. That was workable, but brittle. We now have a concrete runtime contract in `domain/spectrometer.py` built around `SpectrometerBackend`, along with validation helpers used at connection time.
 
-The application supports spectrometer characterization and lab workflow automation by combining:
+This does two useful things:
 
-- Spectrometer discovery and connection
-- Laser source control
-- Filter wheel and head sensor control
-- Two-axis stage movement
-- Live spectrum viewing
-- Automated multi-source acquisition
-- Offline analysis and artifact generation
-- EEPROM inspection and modification for supported devices
+- it makes backend expectations obvious
+- it fails early if a new backend drifts from the required shape
 
-### 3.2 Inferred Design Drivers
+### 2. Measurement workflow moved into an orchestrator
 
-The following design drivers are inferred from the codebase:
+The measurement sequence used to live directly inside `tabs/measurements_tab.py`. That meant the UI layer was also responsible for source control, Auto-IT, dark capture, special-case handling, and error sequencing.
 
-- Support multiple spectrometer families without changing the main operator workflow
-- Run on lab workstations without requiring cloud services
-- Keep operators in a single GUI for setup, acquisition, analysis, and device maintenance
-- Preserve measurement results locally and in human-readable formats
-- Tolerate blocking hardware operations by offloading them from the Tkinter UI thread
-- Operate in a Windows environment because DLL-backed spectrometer drivers are required
+That logic now lives in `services/measurement_orchestrator.py`. The tab is back to doing UI work: reading operator inputs, starting the run, forwarding progress updates, and showing results.
 
-### 3.3 Architectural Style
+### 3. Analysis was split into calculation and rendering layers
 
-Current style: modular desktop monolith with adapter-like hardware backends.
+The old `characterization_analysis.py` module mixed together three different concerns:
 
-Characteristics:
+- scientific calculations
+- plot generation
+- the result object handed back to the UI
 
-- Single deployable desktop process
-- Tkinter notebook as the main interaction shell
-- Functional tab builders under `tabs/`
-- Shared application state stored on the root `SpectroApp`
-- Hardware integration via serial, Modbus RTU, and vendor DLL/SDK wrappers
-- Analysis implemented as an in-process computational pipeline
+That has now been separated into:
 
-## 4. System Context
+- `analysis/calculations.py` for metrics and computed analysis structures
+- `analysis/plotting.py` for writing plot images
+- `services/analysis_service.py` as the orchestration layer used by the app
 
-```mermaid
-flowchart LR
-    User["Lab Operator"] --> App["All Spec Laser Control Desktop App"]
+`characterization_analysis.py` still exists as a small compatibility facade so existing imports do not break.
 
-    App --> Spectrometer["Spectrometer Backends\nAva1 / Hama2 / Hama3 / Hama4"]
-    Spectrometer --> Vendor["Vendor DLLs and SDK Wrappers"]
-    Vendor --> Devices["Physical Spectrometers"]
+### 4. GUI responsiveness was improved in a few hot spots
 
-    App --> Lasers["LaserController"]
-    Lasers --> Obis["OBIS lasers over serial"]
-    Lasers --> Cube["CUBE laser over serial"]
-    Lasers --> Relay["Relay-controlled sources over serial"]
+There was no single dramatic performance bug. The sluggishness came from a handful of small things stacking up:
 
-    App --> HeadSensor["FilterWheelController"]
-    HeadSensor --> FW["Head sensor / filter wheels over serial"]
+- too many redraw requests during live acquisition
+- too many redraw requests during Auto-IT
+- the Measurements tab updating its plot aggressively
+- the Analysis tab embedding live Matplotlib canvases for every saved plot
 
-    App --> Stage["StageController"]
-    Stage --> Modbus["ModbusManager"]
-    Modbus --> Motors["Oriental Motor AZ stage over Modbus RTU"]
+Those hotspots were addressed by batching redraws and by switching the Analysis tab to lightweight PNG previews instead of full embedded plot canvases.
 
-    App --> Files["Local filesystem"]
-    Files --> Settings["spectro_gui_settings.json"]
-    Files --> Results["results/<serial>_<timestamp>/"]
-    Files --> CSV["measurement CSV files"]
-    Files --> Plots["analysis plot PNGs"]
-```
+## Current Architecture
 
-## 5. Current Logical Architecture
-
-### 5.1 High-Level Module Decomposition
+This is still a single-process desktop application. The difference now is that the internal boundaries are clearer.
 
 ```mermaid
 flowchart TB
-    Main["main.py\nSplash screen and app startup"] --> App["app.py\nApplication shell and shared runtime state"]
+    Main["main.py<br/>Startup and splash screen"] --> App["app.py<br/>Tk shell, shared state, results management"]
 
-    App --> Tabs["tabs/*\nUI construction and workflow binding"]
-    App --> Loader["spectrometer_loader.py\nDiscovery and backend selection"]
-    App --> Analysis["characterization_analysis.py\nScientific analysis pipeline"]
-    App --> Stage["stage/*\nStage configuration and motion"]
+    App --> UI["tabs/*<br/>Tkinter views and widget binding"]
+    App --> Services["services/*<br/>Application orchestration"]
+    App --> Domain["domain/*<br/>Contracts and shared models"]
+    App --> Infra["loaders, backends, serial and stage adapters"]
 
-    Tabs --> Setup["Setup tab"]
-    Tabs --> Live["Live View tab"]
-    Tabs --> Measure["Measurements tab"]
-    Tabs --> AnalysisTab["Analysis tab"]
-    Tabs --> EEPROM["EEPROM tab"]
+    Services --> MeasureSvc["MeasurementOrchestrator"]
+    Services --> AnalysisSvc["AnalysisService"]
 
-    Loader --> Ava1["spectrometers/ava1_spectrometer.py"]
-    Loader --> Hama2["spectrometers/hama2_spectrometer.py"]
-    Loader --> Hama3["spectrometers/hama3_spectrometer.py"]
-    Loader --> Hama4["spectrometers/hama4_spectrometer.py"]
+    Domain --> SpecPort["SpectrometerBackend"]
+    Domain --> MeasureModel["MeasurementData / run models"]
+    Domain --> AnalysisModel["Analysis result models"]
 
-    Stage --> StageCfg["stage_config.py"]
-    Stage --> ModbusMgr["modbus_manager.py"]
-    Stage --> StageCtl["stage_controller.py"]
+    Infra --> Loader["spectrometer_loader.py"]
+    Infra --> Backends["spectrometers/*"]
+    Infra --> Lasers["LaserController / serial devices"]
+    Infra --> Stage["stage/*"]
+
+    AnalysisSvc --> Calc["analysis/calculations.py"]
+    AnalysisSvc --> Plot["analysis/plotting.py"]
 ```
 
-### 5.2 Component Responsibility Matrix
+The important point here is simple: the UI still drives the application, but the business logic is no longer expected to live inside the tabs.
 
-| Component | Responsibility | Notes |
+## Main Modules And Responsibilities
+
+| Module | Responsibility | Notes |
 | --- | --- | --- |
-| `main.py` | Splash screen and process startup | Minimal entry point |
-| `app.py` | Root application class, shared state, results management, generic helpers | Currently acts as application shell and partial orchestrator |
-| `tabs/setup_tab.py` | Device configuration, connection, settings load/save, stage config hookup | Also manages dynamic UI and hardware connection logic |
-| `tabs/live_view_tab.py` | Real-time acquisition loop and manual device controls | Uses background thread plus `after()` UI synchronization |
-| `tabs/measurements_tab.py` | Automated acquisition workflow, Auto-IT, CSV generation, analysis trigger | Main business workflow orchestration |
-| `tabs/analysis_tab.py` | Analysis result visualization and multi-run artifact browser | Presentation only, relatively clean |
-| `tabs/eeprom_tab.py` | EEPROM read/write UI for supported spectrometers | Specialized maintenance workflow |
-| `spectrometer_loader.py` | Type inference, DLL path selection, discovery, backend connection | Adapter selection layer |
-| `spectrometers/*.py` | Vendor-specific spectrometer backends | Large modules with implicit shared interface |
-| `stage/*` | Stage config loading, Modbus access, safe motion sequencing | Optional subsystem |
-| `characterization_analysis.py` | Scientific post-processing and plot generation | Heavy analytical module, independent of Tkinter |
+| `main.py` | Application startup and splash screen | Small entry point |
+| `app.py` | Tk shell, shared state, results directory management, analysis view refresh | Still central, but slimmer than before |
+| `tabs/setup_tab.py` | Spectrometer setup, connection flow, configuration UI | Still one of the larger UI modules |
+| `tabs/live_view_tab.py` | Live acquisition controls and display | Uses a background loop plus throttled UI redraw |
+| `tabs/measurements_tab.py` | Measurement UI, operator input collection, run start/stop | Delegates sequence logic to `MeasurementOrchestrator` |
+| `tabs/analysis_tab.py` | Analysis notebook and result presentation | Displays saved image previews instead of live figure canvases |
+| `services/measurement_orchestrator.py` | Auto-IT, source sequencing, signal/dark capture, special-case handling | Core measurement workflow service |
+| `services/analysis_service.py` | Bridges computed analysis and rendered artifacts | Primary analysis entry point for the app |
+| `analysis/calculations.py` | Metric computation and structured analysis data | Pure analysis layer |
+| `analysis/plotting.py` | Plot generation and PNG output | Rendering layer only |
+| `domain/spectrometer.py` | Backend protocol and runtime validation | Contract boundary for spectrometer adapters |
+| `domain/measurement.py` | Measurement row and run data models | Shared run-state model |
+| `spectrometer_loader.py` | Discovery, backend selection, connection validation | First stop for spectrometer integration |
+| `spectrometers/*.py` | Vendor-specific spectrometer implementations | Still vendor-heavy, still hardware-facing |
+| `stage/*` | Stage configuration, communication, safe moves | Separate subsystem |
 
-### 5.3 Runtime State Ownership
+## Device Boundaries
 
-The current system relies on a shared mutable application state rooted in `SpectroApp`. The root object owns:
+### Spectrometers
 
-- Current spectrometer instance and backend type
-- Hardware configuration and COM ports
-- Laser and filter wheel controllers
-- Optional stage controller
-- Live and measurement thread state flags
-- Measurement data accumulated in memory
-- Analysis artifacts, references, and result paths
-- References to UI widgets created by tab builders
-
-This is pragmatic for a desktop application, but it creates tight coupling between UI code and operational workflows.
-
-## 6. External Interfaces
-
-### 6.1 Spectrometers
-
-Supported families discovered through `spectrometer_loader.py`:
+Supported spectrometer families remain:
 
 - Ava1
 - Hama2
 - Hama3
 - Hama4
 
-Observed common backend contract:
+The shared contract is now explicit. A backend is expected to expose:
 
 - `connect()`
 - `disconnect()`
 - `set_it(it_ms)`
 - `measure(ncy=...)`
 - `wait_for_measurement()`
-- `rcm` for most recent captured counts
-- serial number and pixel metadata
+- `rcm`
+- `sn`
+- `npix_active`
 
-Important observation: this contract is implicit. There is no `Protocol`, abstract base class, or formal capability model. Compatibility is enforced by convention.
+That contract is enforced at runtime through the loader before the backend is handed to the rest of the app.
 
-### 6.2 Laser and Serial Devices
+### Laser and serial-controlled devices
 
-`LaserController` manages three serial channels:
+`LaserController` still manages three serial paths:
 
-- OBIS for multiple wavelengths
-- CUBE for 377 nm
-- RELAY for relay-driven sources such as 517 nm, 532 nm, and Hg-Ar
+- OBIS
+- CUBE
+- RELAY
 
-The serial abstraction is lightweight and built on `SerialDevice`.
+The orchestrator treats source control as an external dependency and does not know about Tk widgets or COM port entries directly. That separation matters because it keeps the workflow logic testable.
 
-### 6.3 Head Sensor and Filter Wheels
+### Stage subsystem
 
-`FilterWheelController` is another serial device wrapper with command helpers for:
+The stage stack is unchanged structurally:
 
-- Device query
-- Filter wheel position changes
-- Reset
-- Test motion
+- `StageConfig`
+- `ModbusManager`
+- `StageController`
 
-### 6.4 Stage Motion
+The safe move sequence remains encoded in the application layer:
 
-The stage subsystem uses:
+1. move Y to home
+2. move X to target
+3. move Y to target
 
-- `StageConfig` to load an external JSON configuration
-- `ModbusManager` for thread-safe Modbus RTU communication
-- `StageController` for safe multi-step moves
+That is still the right choice for this system because the safety rule belongs to workflow policy, not just to raw motion control.
 
-The stage integration is notable because motion safety is encoded directly in the controller by forcing the move sequence:
+## Runtime Workflows
 
-1. Y axis to home
-2. X axis to target
-3. Y axis to target
+### Startup and setup
 
-## 7. Detailed Runtime Workflows
+Startup is still straightforward:
 
-### 7.1 Application Startup
+1. `main.py` shows the splash screen
+2. `SpectroApp` initializes the Tk shell
+3. tabs are built
+4. persisted settings are loaded
 
-Startup sequence:
+Setup then handles device selection and connection. The main difference now is that spectrometer instances are validated against the formal backend contract before the app accepts them.
 
-1. `main.py` displays a splash screen.
-2. `SpectroApp` initializes the Tk root window.
-3. Shared controllers and state are created.
-4. Notebook tabs are instantiated.
-5. Tab builder modules attach widgets and workflow methods to the app object.
-6. Saved settings are loaded into the UI if present.
+### Live View
 
-Implication: tab modules are not passive views. They actively extend the root app object with behavior, which keeps wiring simple but increases coupling.
-
-### 7.2 Spectrometer Discovery and Connection
-
-Connection flow:
-
-1. Operator selects type or leaves it as `Auto`.
-2. `spectrometer_loader.py` selects candidate backend types.
-3. DLL path is inferred or taken from user input.
-4. Candidate backends perform device discovery.
-5. Operator optionally selects from multiple discovered devices.
-6. The selected backend is instantiated and connected.
-7. `SpectroApp` stores the instance and updates shared measurement metadata.
-
-Strengths:
-
-- Simple operator experience
-- Clear fallback behavior for `Auto`
-- Backends are isolated from the main GUI by the loader module
-
-Weaknesses:
-
-- Backend capability detection is coarse
-- Discovery and connection logic still leaks into UI-oriented code
-
-### 7.3 Live View Workflow
-
-Live view is implemented as a background measurement loop controlled by a `threading.Event`.
+Live View still uses a background acquisition loop. The shape is the same as before, but redraw behavior is calmer.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant LiveTab
     participant App
-    participant Spec as Spectrometer Backend
-    participant UI as Tkinter UI Thread
+    participant Spec
+    participant UI
 
     User->>LiveTab: Start Live
     LiveTab->>App: set live_running
-    App->>App: spawn live thread
+    App->>App: start live thread
 
-    loop While live_running is set
-        App->>Spec: measure(ncy=1)
+    loop while running
+        App->>Spec: measure(1)
         App->>Spec: wait_for_measurement()
-        App->>Spec: read latest frame from rcm
-        App->>UI: after(update_live_plot)
+        App->>Spec: read rcm
+        App->>UI: queue throttled plot update
     end
 
     User->>LiveTab: Stop Live
     LiveTab->>App: clear live_running
 ```
 
-Design notes:
+Two small but useful improvements were made here:
 
-- Integration time changes are deferred if a frame is in progress.
-- Plot updates are marshaled back onto the UI thread using `after()`.
-- Saturation is handled in the UI by clamping displayed values while preserving detection state.
+- integration time changes are still deferred safely between frames
+- live plot updates are coalesced so the UI thread is not asked to redraw on every possible update
 
-### 7.4 Automated Measurement and Analysis Workflow
+### Measurement and analysis
 
-This is the core business workflow of the system.
+This is where the architecture changed the most.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant MeasureTab
-    participant App
+    participant Orchestrator
     participant Lasers
-    participant Spec as Spectrometer
-    participant Data as MeasurementData
-    participant Analysis as characterization_analysis
-    participant FS as Filesystem
+    participant Spec
+    participant Data
+    participant AnalysisSvc
+    participant Files
     participant AnalysisTab
 
     User->>MeasureTab: Run Selected
-    MeasureTab->>App: spawn measurement thread
-    App->>Lasers: open and normalize source state
+    MeasureTab->>Orchestrator: start(tags, settings snapshot)
 
-    loop For each selected laser
-        App->>Lasers: enable current source
-        App->>Spec: auto-adjust integration time
-        loop Auto-IT
-            App->>Spec: set_it()
-            App->>Spec: measure(1)
-            App->>Spec: wait_for_measurement()
-            App->>MeasureTab: update Auto-IT plot
-        end
-
-        App->>Spec: capture signal frames
-        App->>Lasers: disable current source
-        App->>Spec: capture dark frames
-        App->>Data: append signal and dark rows
+    loop for each requested source
+        Orchestrator->>Lasers: enable source
+        Orchestrator->>Spec: auto-adjust IT
+        Orchestrator->>Spec: capture signal
+        Orchestrator->>Lasers: disable source
+        Orchestrator->>Spec: capture dark
+        Orchestrator->>Data: append rows
     end
 
-    App->>FS: write measurement CSV
-    App->>Analysis: perform_characterization()
-    Analysis->>FS: write plot PNGs
-    App->>AnalysisTab: refresh result notebook
-    App->>User: completion message
+    MeasureTab->>Files: save CSV
+    MeasureTab->>AnalysisSvc: analyze(saved CSV)
+    AnalysisSvc->>Files: write plot PNGs
+    MeasureTab->>AnalysisTab: refresh with saved previews
 ```
 
-Special cases in the current workflow:
+The special cases from the old flow are still supported:
 
-- 640 nm uses a dedicated multi-integration sequence rather than the standard Auto-IT flow.
-- Hg-Ar requires an operator-mediated countdown and fiber switch before acquisition.
-- The measurement thread also triggers analysis automatically after acquisition.
+- 640 nm uses a multi-integration capture sequence
+- Hg-Ar still requires operator-mediated fiber switching
+- the application still runs analysis automatically after a successful measurement run
 
-### 7.5 Stage Safe-Move Workflow
+The difference is that those rules now live in one place instead of being spread across the tab implementation.
 
-```mermaid
-flowchart TD
-    Start["Operator selects slot"] --> Validate["Validate slot, connection, and range"]
-    Validate --> HomeY["Move Y axis to home"]
-    HomeY --> Check1{"Move complete and no alarm?"}
-    Check1 -- No --> Abort["Abort and report failure"]
-    Check1 -- Yes --> MoveX["Move X axis to target"]
-    MoveX --> Check2{"Move complete and no alarm?"}
-    Check2 -- No --> Abort
-    Check2 -- Yes --> MoveY["Move Y axis to target"]
-    MoveY --> Check3{"Move complete and no alarm?"}
-    Check3 -- No --> Abort
-    Check3 -- Yes --> Done["Report success"]
-```
+## Analysis Design
 
-This is a good example of encoded operational safety behavior in the application layer.
+The analysis stack is now deliberately split in two.
 
-## 8. Data Model and Persistence
+### Calculation layer
 
-### 8.1 In-Memory Measurement Model
+`analysis/calculations.py` is responsible for:
 
-`MeasurementData` stores rows in memory until persisted.
+- normalized LSF extraction
+- dark-corrected 640 nm data preparation
+- Hg-Ar peak detection and matching
+- dispersion fitting
+- slit-parameter fitting
+- spectral resolution estimation
+- structured metric output
 
-Logical row shape:
+This layer returns typed analysis data, not UI widgets and not Tk-specific objects.
+
+### Plotting layer
+
+`analysis/plotting.py` takes the computed structures and writes PNG artifacts. It has no say in how those plots are presented in the GUI.
+
+### Service layer
+
+`services/analysis_service.py` is the small coordinator between those two layers. That keeps `app.py` from having to know how analysis internals are assembled.
+
+### Presentation layer
+
+The Analysis tab now works with saved image files rather than holding full embedded Matplotlib canvases for every result. In practice that makes the tab feel much lighter, especially after several runs.
+
+## Data Model And File Outputs
+
+### In-memory measurement model
+
+`MeasurementData` still holds a denormalized row-oriented capture table. That is a good fit for this application because the CSV output is easy to inspect and easy to move around.
+
+Each row contains:
 
 - `Timestamp`
 - `Wavelength`
@@ -376,373 +315,108 @@ Logical row shape:
 - `NumCycles`
 - `Pixel_0 ... Pixel_N`
 
-Naming conventions:
+Signal and dark rows still follow the same naming convention:
 
-- Signal rows use the wavelength tag, for example `405`
-- Dark rows use `<tag>_dark`, for example `405_dark`
+- signal: `405`
+- dark: `405_dark`
 
-This is simple and interoperable, but it is effectively a wide denormalized table.
+### Persisted outputs
 
-### 8.2 Persisted Files
+The current layout is:
 
-| Artifact | Location | Purpose |
-| --- | --- | --- |
-| Settings JSON | `spectro_gui_settings.json` | User configuration persistence |
-| Results folder | `results/<serial>_<timestamp>/` | Run-level output container |
-| Measurement CSV | Results folder | Raw captured spectra and metadata |
-| Plot PNGs | `results/.../plots/` | Analysis artifacts |
+| Artifact | Location |
+| --- | --- |
+| Settings | `spectro_gui_settings.json` |
+| Run folder | `results/<serial>_<timestamp>/` |
+| Raw measurement CSV | run folder root |
+| Plot PNGs | `results/<serial>_<timestamp>/plots/` |
 
-`get_writable_path()` also provides a fallback path under the user home directory when writing near the app location is not possible.
-
-### 8.3 Reference CSV Inputs
-
-The analysis pipeline accepts optional reference CSV files with required columns:
+Reference CSV overlays are still supported. Expected columns are:
 
 - `Wavelength_nm`
 - `WavelengthOffset_nm`
 - `LSF_Normalized`
 
-This allows measured LSF curves to be overlaid with reference datasets.
+## Concurrency And GUI Responsiveness
 
-## 9. Analysis Pipeline Design
+This application still uses a simple threaded model, and that is fine for the job it needs to do.
 
-`characterization_analysis.py` is a computation-heavy module that is already better separated than most of the GUI workflow code.
+### Threads in play
 
-Current pipeline responsibilities include:
+- UI thread for Tkinter
+- live acquisition thread
+- measurement thread
+- stage thread where applicable
+- backend-internal vendor threads where the SDK uses them
 
-- Normalized LSF extraction
-- Dark-corrected 640 nm views
-- Hg-Ar peak detection and matching
-- Dispersion polynomial fitting
-- Spectral resolution estimation
-- Stray light and slit-function plots
-- Optional overlay with reference CSV datasets
+### What was improved
 
-Strengths:
+The practical GUI improvements in this revision are worth calling out because they affect the day-to-day feel of the app.
 
-- Mostly GUI-independent
-- Returns structured artifacts for presentation
-- Centralizes scientific calculations in one module
+- Live plot redraws are throttled instead of being pushed immediately for every frame.
+- Auto-IT plot redraws are throttled the same way.
+- Measurement plot updates are also batched.
+- The measurement worker now snapshots power settings and ports before the run instead of reaching back into Tk widgets throughout the sequence.
+- The Hg-Ar countdown is marshaled onto the UI thread instead of trying to create modal UI from the worker thread.
+- The Analysis tab displays image previews rather than full embedded figure canvases.
 
-Risks:
+None of those changes are flashy on their own. Together, though, they make the interface feel steadier and less heavy.
 
-- Single large file
-- Mixes domain calculations and artifact rendering
-- Limited typed metadata for downstream automation
+## Validation Done For This Refactor
 
-Recommended evolution:
+This refactor was verified at code level, not with live hardware attached.
 
-- Separate calculations from plotting
-- Return a richer analysis result object with machine-readable metrics
-- Keep plot generation as a downstream adapter
+Checks run:
 
-## 10. Concurrency and Threading Model
+- `python3 -m compileall analysis services app.py tabs`
+- `python3 -m unittest discover -s tests`
 
-The current application uses a pragmatic thread model:
+Basic smoke tests were added for:
 
-- UI thread: Tkinter event loop and widget updates
-- Live view thread: repeated single-frame acquisitions
-- Measurement thread: long-running acquisition and analysis workflow
-- Stage move thread: safe slot motion sequence
-- Backend-internal threads: vendor-specific implementation details inside spectrometer wrappers
+- backend contract validation
+- measurement orchestrator flow
+- analysis service behavior on sparse input
 
-Synchronization patterns:
+That gives us a decent safety net for the structural refactor. It does not replace real hardware validation.
 
-- `threading.Event` for stop/start control
-- `after()` for UI-safe updates
-- Backend blocking waits for measurement completion
-- Locking inside `ModbusManager` for bus safety
+## Current Strengths
 
-Architectural implication:
+There is still a lot to like about this application.
 
-The threading model is workable, but there is no unified task orchestration layer. Thread ownership is distributed across modules, which makes future extension harder.
+- The operator workflow is clear and stable.
+- The code now has better internal seams without changing the deployment model.
+- Spectrometer integrations are easier to reason about because the contract is explicit.
+- The measurement workflow is easier to test because it is no longer trapped inside Tk code.
+- Analysis now has a cleaner path from computed metrics to rendered artifacts.
+- The GUI is more responsive under continuous acquisition and after multi-run analysis sessions.
 
-## 11. Deployment View
+## Remaining Rough Edges
 
-```mermaid
-flowchart TB
-    subgraph Workstation["Windows Lab Workstation"]
-        Python["Python 3.11+ runtime"]
-        Tk["Tkinter GUI"]
-        App["All Spec Laser Control code"]
-        DLLs["Vendor DLLs\nAvaSpec / DCAM / DcIcUSB / HiasApi"]
-        Storage["Local settings and results folders"]
-    end
+This revision improves the architecture, but it does not magically finish it.
 
-    subgraph Hardware["Connected Lab Hardware"]
-        Spec["Spectrometer"]
-        OBIS["OBIS lasers"]
-        Cube["CUBE laser"]
-        Relay["Relay board / switched sources"]
-        FW["Head sensor / filter wheels"]
-        Stage["Stage motors and controller"]
-    end
+- `app.py` is still carrying a lot of shared state.
+- `tabs/setup_tab.py` is still broader than it should be.
+- Results persistence is still handled directly in the app shell rather than in a dedicated repository layer.
+- Device capability reporting is still fairly simple.
+- Logging is useful for operators, but still not rich enough for serious diagnostics.
+- Backend modules under `spectrometers/` are still large and hardware-specific by nature.
 
-    Python --> Tk
-    Tk --> App
-    App --> DLLs
-    App --> Storage
+That said, the code is in a much better place than it was before this refactor. The biggest maintenance risks were not in the hardware SDK wrappers. They were in the hidden coupling between UI code, workflow logic, and analysis code. That coupling is now reduced.
 
-    App --> Spec
-    App --> OBIS
-    App --> Cube
-    App --> Relay
-    App --> FW
-    App --> Stage
-```
+## Near-Term Next Steps
 
-Deployment constraints:
+If work continues in the same direction, the next sensible moves are:
 
-- Spectrometer driver support is Windows-centric because of DLL dependencies.
-- The system is designed for local execution on a workstation directly attached to lab equipment.
-- There is no service boundary, remote API, or database dependency in the current architecture.
+1. pull results persistence into a small repository-style module
+2. introduce a dedicated hardware session service for connect/disconnect and capability reporting
+3. continue shrinking `app.py` and `tabs/setup_tab.py`
+4. add a few more smoke tests around connection setup and analysis edge cases
+5. run hardware validation for the refactored measurement path on each supported spectrometer family
 
-## 12. Quality Attributes
+## Conclusion
 
-### 12.1 Reliability
+The important thing about this revision is that it keeps the right parts intact. This is still a single desktop application. It still suits the lab environment. Operators do not need to learn a new workflow.
 
-Positive indicators:
+What changed is the internal shape of the code. The backend interface is explicit now. The measurement sequence has a real home. Analysis has been split into calculation and rendering layers. And the UI is doing less unnecessary work while the application is busy.
 
-- Background threads prevent the UI from being fully blocked during long workflows
-- Stage communication is protected with internal locking and retries
-- Results are persisted locally in timestamped folders
-
-Gaps:
-
-- No transaction-style rollback across multi-device workflows
-- Limited recovery semantics if one subsystem fails mid-run
-- Operator-facing errors are shown, but structured diagnostics are limited
-
-### 12.2 Maintainability
-
-Positive indicators:
-
-- Major subsystems exist as named modules
-- Spectrometer loading is separated from tab-specific logic
-
-Gaps:
-
-- Several modules are very large
-- `SpectroApp` owns too many responsibilities
-- UI builders also implement orchestration logic
-- Implicit backend interfaces increase regression risk
-
-### 12.3 Extensibility
-
-Positive indicators:
-
-- New spectrometer families can be added through the loader and backend pattern
-- New analysis plots can be added centrally
-
-Gaps:
-
-- Adding new hardware often requires touching both orchestration and UI code
-- Device capabilities are not modeled explicitly
-
-### 12.4 Safety and Operational Control
-
-Positive indicators:
-
-- Stage move sequencing encodes a safe travel pattern
-- EEPROM editing is isolated to a dedicated tab
-- Saturation detection is surfaced during live and measurement workflows
-
-Gaps:
-
-- EEPROM writes lack a stronger authorization or audit model
-- Hardware command sequencing is not centrally audited
-
-## 13. Current Architectural Risks
-
-### 13.1 Large Module Concentration
-
-The review and the local architecture analyzer both identify multiple oversized modules, including:
-
-- `app.py`
-- `characterization_analysis.py`
-- `tabs/setup_tab.py`
-- `tabs/live_view_tab.py`
-- `tabs/measurements_tab.py`
-- vendor backend modules under `spectrometers/`
-
-Impact:
-
-- Higher change risk
-- Harder onboarding
-- Lower unit-test granularity
-
-### 13.2 Implicit Device Contract
-
-Multiple spectrometer backends appear to implement the same shape, but there is no formal contract.
-
-Impact:
-
-- Runtime-only compatibility validation
-- Increased likelihood of adapter drift
-- Harder static analysis and mocking
-
-### 13.3 Mixed UI and Application Logic
-
-Tab modules both define widgets and implement workflows such as:
-
-- connection orchestration
-- measurement sequencing
-- hardware state normalization
-- CSV and settings persistence
-
-Impact:
-
-- Hard to test without a GUI context
-- Hard to reuse logic outside the Tkinter shell
-
-### 13.4 Limited Observability
-
-The application uses logging and message boxes, but does not yet provide:
-
-- structured run identifiers
-- device command audit trails
-- centralized failure classification
-- health/status dashboards
-
-### 13.5 Platform Coupling
-
-The current deployment is correctly optimized for a Windows lab workstation, but vendor DLL dependency makes portability limited by design.
-
-## 14. Recommended Target Architecture
-
-The recommended target is still a desktop monolith. The change should be internal modularization, not service decomposition.
-
-### 14.1 Target Architectural Principles
-
-- Keep one desktop process
-- Separate UI, application services, domain models, and infrastructure adapters
-- Formalize device contracts
-- Isolate persistence and analysis from Tkinter widget code
-- Centralize workflow orchestration
-
-### 14.2 Target Logical Architecture
-
-```mermaid
-flowchart TB
-    subgraph UI["Presentation Layer"]
-        SetupUI["Setup UI"]
-        LiveUI["Live View UI"]
-        MeasureUI["Measurements UI"]
-        AnalysisUI["Analysis UI"]
-        EEPROMUI["EEPROM UI"]
-    end
-
-    subgraph AppSvc["Application Services"]
-        SessionSvc["HardwareSessionService"]
-        MeasureSvc["MeasurementOrchestrator"]
-        AnalysisSvc["AnalysisService"]
-        StageSvc["StageMotionService"]
-        SettingsSvc["SettingsService"]
-        ResultSvc["ResultsRepository"]
-    end
-
-    subgraph Domain["Domain Contracts"]
-        SpecPort["SpectrometerBackend Protocol"]
-        LaserPort["LaserControl Port"]
-        StagePort["Stage Port"]
-        Models["Measurement and Analysis Models"]
-    end
-
-    subgraph Infra["Infrastructure Adapters"]
-        SpecAdapters["Ava1 / Hama2 / Hama3 / Hama4 adapters"]
-        SerialAdapters["Laser and filter wheel serial adapters"]
-        StageAdapters["Modbus stage adapters"]
-        Filesystem["JSON / CSV / PNG filesystem adapters"]
-    end
-
-    UI --> AppSvc
-    AppSvc --> Domain
-    AppSvc --> Infra
-    Infra --> Domain
-```
-
-### 14.3 Proposed Internal Services
-
-| Proposed service | Responsibility |
-| --- | --- |
-| `HardwareSessionService` | Connect, disconnect, and capability reporting for all active devices |
-| `MeasurementOrchestrator` | Coordinate Auto-IT, acquisition sequencing, dark frames, and stop conditions |
-| `AnalysisService` | Convert measurement data into domain metrics and plot artifacts |
-| `StageMotionService` | Encapsulate stage slot movement and safety policy |
-| `SettingsService` | Read/write application settings and resolve writable paths |
-| `ResultsRepository` | Persist CSVs, plots, and run metadata under a stable schema |
-
-### 14.4 Proposed Domain Contracts
-
-Introduce explicit interfaces such as:
-
-- `SpectrometerBackend`
-- `LaserSourceController`
-- `FilterWheelPort`
-- `StageControllerPort`
-- `RunResult`
-- `AnalysisMetrics`
-- `AnalysisArtifact`
-
-This would make device mocking and unit testing significantly easier.
-
-## 15. Refactor Roadmap
-
-### Phase 1: Low-Risk Structural Cleanup
-
-- Introduce formal backend protocols or abstract base classes
-- Extract settings persistence from `setup_tab.py`
-- Extract measurement orchestration from `measurements_tab.py`
-- Move generic hardware helpers out of `app.py`
-- Add run-level logging context with serial number and timestamp
-
-### Phase 2: Workflow Isolation
-
-- Create a dedicated measurement orchestrator module
-- Create a dedicated analysis service facade
-- Separate plot rendering from metric computation in `characterization_analysis.py`
-- Add typed result objects for acquisition and analysis
-
-### Phase 3: Operational Hardening
-
-- Add command audit logging for hardware interactions
-- Add capability-driven UI enablement, especially for EEPROM operations
-- Add smoke tests with mock backends
-- Add packaging and deployment documentation for reproducible workstation installs
-
-## 16. Recommended Near-Term Decisions
-
-If the team wants the highest return with the least disruption, the next three architecture decisions should be:
-
-1. Formalize the spectrometer backend interface.
-2. Move measurement workflow logic into a dedicated orchestrator module.
-3. Split analysis calculations from plot generation and UI presentation.
-
-These three changes would preserve the current operator experience while materially reducing long-term maintenance cost.
-
-## 17. Appendix: Codebase Mapping
-
-Primary modules reviewed:
-
-- `main.py`
-- `app.py`
-- `spectrometer_loader.py`
-- `characterization_analysis.py`
-- `tabs/setup_tab.py`
-- `tabs/live_view_tab.py`
-- `tabs/measurements_tab.py`
-- `tabs/analysis_tab.py`
-- `tabs/eeprom_tab.py`
-- `stage/stage_controller.py`
-- `stage/modbus_manager.py`
-- `stage/stage_config.py`
-- `spectrometers/ava1_spectrometer.py`
-- `spectrometers/hama2_spectrometer.py`
-- `spectrometers/hama3_spectrometer.py`
-- `spectrometers/hama4_spectrometer.py`
-
-## 18. Conclusion
-
-The current application is a functional and practical lab-control desktop system with real strengths in hardware integration and operator workflow cohesion. Its main challenge is not architectural unsuitability; it is architectural concentration. The safest path forward is to keep the single-process desktop deployment model and progressively refactor the internals into explicit services and contracts.
-
-That approach protects the working product while creating a foundation for cleaner testing, faster feature work, and safer hardware-facing changes.
+That is the right kind of progress for this project: lower risk, better structure, no drama.
