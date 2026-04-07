@@ -546,6 +546,10 @@ class SpectroApp(tk.Tk):
         except Exception:
             pass
 
+        # Apply centralized UI theme
+        from tabs.theme import apply_theme
+        apply_theme(self)
+
         self.npix = 2048
         self.sn = "Unknown"
         self.spec = None
@@ -592,7 +596,7 @@ class SpectroApp(tk.Tk):
         self._pending_auto_it_plot = None
 
         self.nb = ttk.Notebook(self)
-        self.nb.pack(fill="both", expand=True)
+        self.nb.pack(fill="both", expand=True, padx=6, pady=(6, 4))
 
         self.setup_tab = ttk.Frame(self.nb)
         self.live_tab = ttk.Frame(self.nb)
@@ -600,11 +604,11 @@ class SpectroApp(tk.Tk):
         self.analysis_tab = ttk.Frame(self.nb)
         self.eeprom_tab = ttk.Frame(self.nb)
 
-        self.nb.add(self.setup_tab, text="Setup")
-        self.nb.add(self.live_tab, text="Live View")
-        self.nb.add(self.measure_tab, text="Measurements")
-        self.nb.add(self.analysis_tab, text="Analysis")
-        self.nb.add(self.eeprom_tab, text="EEPROM")
+        self.nb.add(self.setup_tab, text="  Setup  ")
+        self.nb.add(self.live_tab, text="  Live View  ")
+        self.nb.add(self.measure_tab, text="  Measurements  ")
+        self.nb.add(self.analysis_tab, text="  Analysis  ")
+        self.nb.add(self.eeprom_tab, text="  EEPROM  ")
 
         from tabs import analysis_tab, eeprom_tab, live_view_tab, measurements_tab, setup_tab
 

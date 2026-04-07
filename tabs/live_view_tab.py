@@ -16,6 +16,8 @@ from .ui_utils import ScrollableFrame, bind_debounced_configure
 LOGGER = logging.getLogger(__name__)
 
 def build(app):
+    from .theme import Colors, Fonts, Spacing, configure_matplotlib_style, make_action_button
+
     # Import constants from app
     OBIS_LASER_MAP = {
         "405": 5,
@@ -40,47 +42,24 @@ def build(app):
         controls_host.grid(row=0, column=1, sticky="nsew", padx=(0, 4), pady=4)
         controls_host.grid_propagate(False)
 
-        controls_scroll = ScrollableFrame(controls_host, y_scroll=True, background="#f0f0f0")
+        controls_scroll = ScrollableFrame(controls_host, y_scroll=True, background=Colors.BG_PRIMARY)
         controls_scroll.pack(fill="both", expand=True)
         controls_container = controls_scroll.content
         controls_grid = ttk.Frame(controls_container)
         controls_grid.pack(fill="both", expand=True)
 
-        # Matplotlib figure - larger and more professional
+        # Matplotlib figure
         app.live_fig = Figure(figsize=(12, 7), dpi=100, tight_layout=True)
         app.live_ax = app.live_fig.add_subplot(111)
-        
-        # Professional styling
-        app.live_ax.set_title("Live Spectrum", fontsize=14, fontweight="bold", pad=12)
-        app.live_ax.set_xlabel("Pixel Index", fontsize=11, fontweight="bold")
-        app.live_ax.set_ylabel("Counts", fontsize=11, fontweight="bold")
-        
-        # Enhanced grid with subtle styling
-        app.live_ax.grid(True, which='major', linestyle='-', linewidth=0.5, alpha=0.3, color='gray')
-        app.live_ax.grid(True, which='minor', linestyle=':', linewidth=0.3, alpha=0.2, color='gray')
-        app.live_ax.minorticks_on()
-        
-        # Professional plot line – normal (blue) and saturated overlay (red)
-        app.live_line, = app.live_ax.plot([], [], lw=2, color="#1f77b4", label="Signal", alpha=0.9)
-        app.live_sat_line, = app.live_ax.plot([], [], lw=2.5, color="red", label="Saturated", alpha=0.95)
+        configure_matplotlib_style(app.live_fig, app.live_ax, title="Live Spectrum")
+
+        # Plot lines
+        app.live_line, = app.live_ax.plot([], [], lw=1.8, color="#2563eb", label="Signal", alpha=0.9)
+        app.live_sat_line, = app.live_ax.plot([], [], lw=2.2, color=Colors.DANGER, label="Saturated", alpha=0.95)
         app.live_sat_line.set_visible(False)
 
-        # Enhanced legend
-        app.live_ax.legend(loc="upper right", frameon=True, shadow=True,
-                          fancybox=True, framealpha=0.95, fontsize=10)
-        
-        # Set background color
-        app.live_ax.set_facecolor('#f8f9fa')
-        app.live_fig.patch.set_facecolor('white')
-        
-        # Improve tick labels
-        app.live_ax.tick_params(axis='both', which='major', labelsize=10, length=6, width=1.5)
-        app.live_ax.tick_params(axis='both', which='minor', length=3, width=1)
-        
-        # Add spines (borders) styling
-        for spine in app.live_ax.spines.values():
-            spine.set_linewidth(1.5)
-            spine.set_color('#333333')
+        app.live_ax.legend(loc="upper right", frameon=True, fancybox=True,
+                          framealpha=0.92, fontsize=9, edgecolor=Colors.BORDER_LIGHT)
 
         app.live_canvas = FigureCanvasTkAgg(app.live_fig, master=plot_container)
         app.live_canvas.draw()
@@ -152,15 +131,13 @@ def build(app):
         live_control_frame = ttk.LabelFrame(controls_grid, text="Live View Control", padding=8)
         live_control_frame.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
         
-        app.live_start_btn = tk.Button(live_control_frame, text="▶ Start Live", command=app.start_live,
-                                       bg="#28a745", fg="white", font=("Arial", 10, "bold"),
-                                       width=18, height=2, relief="raised", bd=2)
-        app.live_start_btn.pack(pady=(0, 6))
-        
-        app.live_stop_btn = tk.Button(live_control_frame, text="■ Stop Live", command=app.stop_live,
-                                      bg="#dc3545", fg="white", font=("Arial", 10, "bold"),
-                                      width=18, height=2, relief="raised", bd=2)
-        app.live_stop_btn.pack()
+        app.live_start_btn = make_action_button(live_control_frame, text="Start Live",
+                                                command=app.start_live, width=18)
+        app.live_start_btn.pack(pady=(0, 6), fill="x")
+
+        app.live_stop_btn = make_action_button(live_control_frame, text="Stop Live",
+                                               command=app.stop_live, danger=True, width=18)
+        app.live_stop_btn.pack(fill="x")
 
         # === Head Sensor Section ===
         headsensor_frame = ttk.LabelFrame(controls_grid, text="Head Sensor", padding=8)
@@ -180,7 +157,7 @@ def build(app):
         app.headsensor_toggle.pack(side="left")
         
         # Status label (shows device ID or error)
-        app.headsensor_status_label = ttk.Label(headsensor_frame, text="Disabled", foreground="gray", font=("TkDefaultFont", 9))
+        app.headsensor_status_label = ttk.Label(headsensor_frame, text="Disabled", foreground="gray", font=Fonts.BODY_SMALL)
         app.headsensor_status_label.pack(anchor="w", pady=(0, 6))
         
         # Frame to hold all filter wheel controls (initially hidden)
@@ -190,7 +167,7 @@ def build(app):
         ttk.Separator(app.headsensor_controls_frame, orient="horizontal").pack(fill="x", pady=(0, 8))
         
         # Filter wheel selection using radio buttons
-        fw_selection_label = ttk.Label(app.headsensor_controls_frame, text="Target Filter Wheel:", font=("TkDefaultFont", 9, "bold"))
+        fw_selection_label = ttk.Label(app.headsensor_controls_frame, text="Target Filter Wheel:", font=Fonts.BODY_SMALL_BOLD)
         fw_selection_label.pack(anchor="w", pady=(0, 4))
         
         app.filterwheel_var = tk.IntVar(value=1)  # Default to Filter Wheel 1
@@ -214,7 +191,7 @@ def build(app):
         app.fw2_radio.pack(side="left")
         
         # Commands dropdown
-        cmd_label = ttk.Label(app.headsensor_controls_frame, text="Command:", font=("TkDefaultFont", 9, "bold"))
+        cmd_label = ttk.Label(app.headsensor_controls_frame, text="Command:", font=Fonts.BODY_SMALL_BOLD)
         cmd_label.pack(anchor="w", pady=(0, 4))
         
         app.filterwheel_cmd_var = tk.StringVar(value="")
@@ -234,7 +211,7 @@ def build(app):
         # Position status section
         ttk.Separator(app.headsensor_controls_frame, orient="horizontal").pack(fill="x", pady=(0, 8))
         
-        status_label = ttk.Label(app.headsensor_controls_frame, text="Position Status:", font=("TkDefaultFont", 9, "bold"))
+        status_label = ttk.Label(app.headsensor_controls_frame, text="Position Status:", font=Fonts.BODY_SMALL_BOLD)
         status_label.pack(anchor="w", pady=(0, 4))
         
         # Filter Wheel 1 position status
@@ -242,7 +219,7 @@ def build(app):
             app.headsensor_controls_frame, 
             text="FW 1: Uncertain", 
             foreground="gray",
-            font=("TkDefaultFont", 9)
+            font=Fonts.BODY_SMALL
         )
         app.fw1_status_label.pack(anchor="w", pady=(0, 3))
         
@@ -251,7 +228,7 @@ def build(app):
             app.headsensor_controls_frame, 
             text="FW 2: Uncertain", 
             foreground="gray",
-            font=("TkDefaultFont", 9)
+            font=Fonts.BODY_SMALL
         )
         app.fw2_status_label.pack(anchor="w")
 
@@ -263,14 +240,14 @@ def build(app):
         app.stage_slots_container.pack(fill="both", expand=True)
 
         app.stage_move_status = ttk.Label(stage_frame, text="", foreground="gray",
-                                          font=("TkDefaultFont", 9))
+                                          font=Fonts.BODY_SMALL)
         app.stage_move_status.pack(anchor="w", pady=(4, 0))
 
         # No-slots placeholder
         app.stage_no_slots_label = ttk.Label(
             app.stage_slots_container,
             text="No stage config loaded.\nSet path in Setup tab.",
-            foreground="gray", font=("TkDefaultFont", 9),
+            foreground="gray", font=Fonts.BODY_SMALL,
         )
         app.stage_no_slots_label.pack(anchor="w")
 
@@ -337,7 +314,7 @@ def build(app):
                 app.stage_no_slots_label = ttk.Label(
                     app.stage_slots_container,
                     text="No stage config loaded.\nSet path in Setup tab.",
-                    foreground="gray", font=("TkDefaultFont", 9),
+                    foreground="gray", font=Fonts.BODY_SMALL,
                 )
                 app.stage_no_slots_label.pack(anchor="w")
                 return
@@ -357,8 +334,9 @@ def build(app):
                 app.stage_slots_container,
                 text="STOP",
                 command=_stop_stage,
-                bg="#dc3545", fg="white", font=("Arial", 9, "bold"),
-                width=16, state="disabled",
+                bg=Colors.DANGER, fg=Colors.TEXT_ON_ACCENT,
+                font=Fonts.BODY_SMALL_BOLD,
+                width=16, state="disabled", relief="flat", cursor="hand2",
             )
             app._stage_stop_btn.pack(anchor="w", pady=(6, 0))
 

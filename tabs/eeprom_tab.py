@@ -21,39 +21,30 @@ LOGGER = logging.getLogger(__name__)
 
 def build(app):
     """Build the EEPROM tab."""
-    
-    # Configure custom styles
-    style = ttk.Style()
-    style.configure('EEPROM.TLabelframe', padding=12)
-    style.configure('EEPROM.TLabelframe.Label', font=('TkDefaultFont', 11, 'bold'))
-    style.configure('EEPROMLabel.TLabel', font=('TkDefaultFont', 10))
-    style.configure('EEPROMValue.TLabel', font=('Courier New', 10))
-    style.configure('EEPROMButton.TButton', font=('TkDefaultFont', 10), padding=8)
-    
-    # Main container with scrolling
+    from .theme import Colors, Fonts, Spacing
+
     main_frame = ttk.Frame(app.eeprom_tab)
     main_frame.pack(fill="both", expand=True, padx=4, pady=4)
 
-    scrollable = ScrollableFrame(main_frame, x_scroll=True, y_scroll=True, background="#f0f0f0")
+    scrollable = ScrollableFrame(main_frame, x_scroll=True, y_scroll=True, background=Colors.BG_PRIMARY)
     scrollable.pack(fill="both", expand=True)
     frame = scrollable.content
-    
+
     # ============ HEADER ============
     header_frame = ttk.Frame(frame)
-    header_frame.pack(fill="x", padx=10, pady=(0, 12))
+    header_frame.pack(fill="x", padx=10, pady=(0, Spacing.PAD_MD))
     header_frame.columnconfigure(0, weight=1)
-    header_title = ttk.Label(header_frame, text="💾 EEPROM Data Reader", 
-                             font=('TkDefaultFont', 14, 'bold'))
+    header_title = ttk.Label(header_frame, text="EEPROM Data Reader",
+                             font=Fonts.H1)
     header_title.grid(row=0, column=0, sticky="w")
-    
-    # Read button
-    read_button = ttk.Button(header_frame, text="🔄 Read EEPROM", 
+
+    read_button = ttk.Button(header_frame, text="Read EEPROM",
                              command=lambda: read_eeprom_data(app),
-                             style='EEPROMButton.TButton')
+                             style='Accent.TButton')
     read_button.grid(row=0, column=1, sticky="e", padx=4)
     
     # ============ DEVICE INFO SECTION ============
-    device_group = ttk.LabelFrame(frame, text="📟 Device Information", 
+    device_group = ttk.LabelFrame(frame, text="Device Information",
                                   style='EEPROM.TLabelframe')
     device_group.pack(fill="x", padx=8, pady=8)
     device_group.columnconfigure(1, weight=1)
@@ -64,33 +55,33 @@ def build(app):
     ttk.Label(device_group, text="Structure Version:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_struct_version = ttk.Label(device_group, text="--", 
-                                         style='EEPROMValue.TLabel', foreground='blue')
+                                         style='EEPROMValue.TLabel', foreground=Colors.ACCENT)
     app.eeprom_struct_version.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(device_group, text="(Address: 0x00-0x01)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # Serial Number
     ttk.Label(device_group, text="Avabench Serial Number:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_serial = ttk.Label(device_group, text="--", 
-                                 style='EEPROMValue.TLabel', foreground='darkgreen')
+                                 style='EEPROMValue.TLabel', foreground=Colors.SUCCESS)
     app.eeprom_serial.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(device_group, text="(Address: 0x02-0x0B)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # Detector Name
     ttk.Label(device_group, text="Detector Name:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_detector = ttk.Label(device_group, text="--", 
-                                   style='EEPROMValue.TLabel', foreground='darkblue')
+                                   style='EEPROMValue.TLabel', foreground=Colors.ACCENT)
     app.eeprom_detector.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(device_group, text="(Address: 0x0C-0x4B)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     
     # ============ PIXEL INFORMATION SECTION ============
-    pixel_group = ttk.LabelFrame(frame, text="🔲 Pixel Configuration", 
+    pixel_group = ttk.LabelFrame(frame, text="Pixel Configuration",
                                  style='EEPROM.TLabelframe')
     pixel_group.pack(fill="x", padx=8, pady=8)
     pixel_group.columnconfigure(1, weight=1)
@@ -101,10 +92,10 @@ def build(app):
     ttk.Label(pixel_group, text="Total Pixels:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_total_pixels = ttk.Label(pixel_group, text="--", 
-                                       style='EEPROMValue.TLabel', foreground='blue')
+                                       style='EEPROMValue.TLabel', foreground=Colors.ACCENT)
     app.eeprom_total_pixels.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(pixel_group, text="(Address: 0x4C-0x4D)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # Optical Black Pixels - Left
@@ -114,7 +105,7 @@ def build(app):
                                    style='EEPROMValue.TLabel', foreground='purple')
     app.eeprom_obp_left.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(pixel_group, text="(Address: 0x4E-0x4F)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # Optical Black Pixels - Right
@@ -124,36 +115,36 @@ def build(app):
                                     style='EEPROMValue.TLabel', foreground='purple')
     app.eeprom_obp_right.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(pixel_group, text="(Address: 0x50-0x51)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # First Effective Pixel
     ttk.Label(pixel_group, text="First Effective Pixel:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_first_pixel = ttk.Label(pixel_group, text="--", 
-                                      style='EEPROMValue.TLabel', foreground='darkgreen')
+                                      style='EEPROMValue.TLabel', foreground=Colors.SUCCESS)
     app.eeprom_first_pixel.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(pixel_group, text="(Address: 0x52-0x53)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     row += 1
     
     # Last Effective Pixel
     ttk.Label(pixel_group, text="Last Effective Pixel:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_last_pixel = ttk.Label(pixel_group, text="--", 
-                                     style='EEPROMValue.TLabel', foreground='darkgreen')
+                                     style='EEPROMValue.TLabel', foreground=Colors.SUCCESS)
     app.eeprom_last_pixel.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     ttk.Label(pixel_group, text="(Address: 0x54-0x55)", 
-             foreground='gray', font=('TkDefaultFont', 8)).grid(row=row, column=2, sticky="w", padx=4, pady=6)
+             foreground=Colors.TEXT_MUTED, font=Fonts.CAPTION).grid(row=row, column=2, sticky="w", padx=4, pady=6)
     
     # ============ GAIN AND OFFSET SECTION (EDITABLE) ============
-    gain_offset_group = ttk.LabelFrame(frame, text="📊 Gain and Offset Values (Editable)", 
+    gain_offset_group = ttk.LabelFrame(frame, text="Gain and Offset Values (Editable)", 
                                        style='EEPROM.TLabelframe')
     gain_offset_group.pack(fill="x", padx=8, pady=8)
     gain_offset_group.columnconfigure(1, weight=1)
     
     ttk.Label(gain_offset_group, text="Edit values below and click 'Save' to write to EEPROM:", 
-             font=('TkDefaultFont', 8, 'italic'),
+             font=Fonts.CAPTION_ITALIC,
              foreground='gray').grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(4, 8))
     
     row = 1
@@ -162,7 +153,7 @@ def build(app):
     ttk.Label(gain_offset_group, text="Gain[0]:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_gain_0_entry = ttk.Entry(gain_offset_group, width=20, 
-                                        font=('Courier New', 10))
+                                        font=Fonts.MONO)
     app.eeprom_gain_0_entry.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     app.eeprom_gain_0_entry.insert(0, "--")
     row += 1
@@ -170,7 +161,7 @@ def build(app):
     ttk.Label(gain_offset_group, text="Gain[1]:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_gain_1_entry = ttk.Entry(gain_offset_group, width=20, 
-                                        font=('Courier New', 10))
+                                        font=Fonts.MONO)
     app.eeprom_gain_1_entry.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     app.eeprom_gain_1_entry.insert(0, "--")
     row += 1
@@ -179,7 +170,7 @@ def build(app):
     ttk.Label(gain_offset_group, text="Offset[0]:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_offset_0_entry = ttk.Entry(gain_offset_group, width=20, 
-                                          font=('Courier New', 10))
+                                          font=Fonts.MONO)
     app.eeprom_offset_0_entry.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     app.eeprom_offset_0_entry.insert(0, "--")
     row += 1
@@ -187,7 +178,7 @@ def build(app):
     ttk.Label(gain_offset_group, text="Offset[1]:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_offset_1_entry = ttk.Entry(gain_offset_group, width=20, 
-                                          font=('Courier New', 10))
+                                          font=Fonts.MONO)
     app.eeprom_offset_1_entry.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     app.eeprom_offset_1_entry.insert(0, "--")
     row += 1
@@ -196,7 +187,7 @@ def build(app):
     ttk.Label(gain_offset_group, text="Extended Offset:", 
              style='EEPROMLabel.TLabel').grid(row=row, column=0, sticky="w", padx=12, pady=6)
     app.eeprom_ext_offset_entry = ttk.Entry(gain_offset_group, width=20, 
-                                            font=('Courier New', 10))
+                                            font=Fonts.MONO)
     app.eeprom_ext_offset_entry.grid(row=row, column=1, sticky="w", padx=12, pady=6)
     app.eeprom_ext_offset_entry.insert(0, "--")
     row += 1
@@ -206,17 +197,17 @@ def build(app):
     save_gain_button_frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 8))
     save_gain_button_frame.columnconfigure(0, weight=1)
     
-    ttk.Button(save_gain_button_frame, text="💾 Save Gain/Offset to EEPROM", 
+    ttk.Button(save_gain_button_frame, text="Save Gain/Offset to EEPROM", 
               command=lambda: save_gain_offset_to_eeprom(app),
               style='EEPROMButton.TButton').grid(row=0, column=0, sticky="w", padx=(0, 8))
     
     save_gain_warning_label = ttk.Label(save_gain_button_frame, 
-                                        text="⚠️ Warning: This will permanently modify EEPROM data!", 
-                                        foreground='red', font=('TkDefaultFont', 8, 'bold'))
+                                        text="Warning: This will permanently modify EEPROM data!", 
+                                        foreground=Colors.DANGER, font=Fonts.CAPTION)
     save_gain_warning_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
     
     # ============ DEFECTIVE PIXELS SECTION (EDITABLE) ============
-    defect_group = ttk.LabelFrame(frame, text="⚠️ Defective/Hot Pixels (Editable)", 
+    defect_group = ttk.LabelFrame(frame, text="Defective / Hot Pixels (Editable)", 
                                   style='EEPROM.TLabelframe')
     defect_group.pack(fill="both", expand=True, padx=8, pady=8)
     
@@ -225,7 +216,7 @@ def build(app):
     defect_intro_label.pack(anchor="w", padx=12, pady=(8, 4))
     
     ttk.Label(defect_group, text="Note: Leave empty or enter 65535 for unused entries", 
-             font=('TkDefaultFont', 8, 'italic'),
+             font=Fonts.CAPTION_ITALIC,
              foreground='gray').pack(anchor="w", padx=12, pady=(0, 4))
     
     # Editable text widget for defective pixels
@@ -235,7 +226,7 @@ def build(app):
     defect_scrollbar = ttk.Scrollbar(defect_frame, orient="vertical")
     app.eeprom_defect_text = tk.Text(defect_frame, height=4, width=80,
                                      yscrollcommand=defect_scrollbar.set,
-                                     font=('Courier New', 10),
+                                     font=Fonts.MONO,
                                      wrap='word',
                                      relief='solid',
                                      borderwidth=1,
@@ -250,27 +241,27 @@ def build(app):
     save_button_frame.pack(fill="x", padx=12, pady=(0, 8))
     save_button_frame.columnconfigure(0, weight=1)
     
-    ttk.Button(save_button_frame, text="💾 Save Defective Pixels to EEPROM", 
+    ttk.Button(save_button_frame, text="Save Defective Pixels to EEPROM", 
               command=lambda: save_defective_pixels_to_eeprom(app),
               style='EEPROMButton.TButton').grid(row=0, column=0, sticky="w", padx=(0, 8))
     
     save_defect_warning_label = ttk.Label(save_button_frame, 
-                                          text="⚠️ Warning: This will permanently modify EEPROM data!", 
-                                          foreground='red', font=('TkDefaultFont', 8, 'bold'))
+                                          text="Warning: This will permanently modify EEPROM data!", 
+                                          foreground=Colors.DANGER, font=Fonts.CAPTION)
     save_defect_warning_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
     
     # ============ WAVELENGTH CALIBRATION SECTION ============
-    wl_group = ttk.LabelFrame(frame, text="📐 Wavelength Calibration Polynomial", 
+    wl_group = ttk.LabelFrame(frame, text="Wavelength Calibration Polynomial", 
                               style='EEPROM.TLabelframe')
     wl_group.pack(fill="x", padx=8, pady=8)
     wl_group.columnconfigure(1, weight=1)
     
     ttk.Label(wl_group, text="4th order polynomial (Address: 0x92-0xA5):", 
-             style='EEPROMLabel.TLabel', foreground='darkblue').grid(
+             style='EEPROMLabel.TLabel', foreground=Colors.ACCENT).grid(
         row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
     
     ttk.Label(wl_group, text="λ(pixel) = x₀ + x₁·pixel + x₂·pixel² + x₃·pixel³ + x₄·pixel⁴", 
-             font=('TkDefaultFont', 9, 'italic'),
+             font=Fonts.CAPTION_ITALIC,
              foreground='#555').grid(row=1, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
     
     row = 2
@@ -278,12 +269,12 @@ def build(app):
         ttk.Label(wl_group, text=f"x{i} (Coefficient {i}):", 
                  style='EEPROMLabel.TLabel').grid(row=row+i, column=0, sticky="w", padx=12, pady=4)
         coef_label = ttk.Label(wl_group, text="--", 
-                              style='EEPROMValue.TLabel', foreground='darkblue')
+                              style='EEPROMValue.TLabel', foreground=Colors.ACCENT)
         coef_label.grid(row=row+i, column=1, sticky="w", padx=12, pady=4)
         setattr(app, f'eeprom_wl_coef_{i}', coef_label)
     
     ttk.Label(wl_group, text="Note: Avantes uses 3rd order (x₀ to x₃), so x₄ = 0.0", 
-             font=('TkDefaultFont', 8, 'italic'),
+             font=Fonts.CAPTION_ITALIC,
              foreground='gray').grid(row=row+5, column=0, columnspan=2, sticky="w", padx=12, pady=(4, 8))
     
     # ============ STATUS BAR ============
@@ -292,9 +283,9 @@ def build(app):
     status_frame.columnconfigure(1, weight=1)
     
     ttk.Label(status_frame, text="ℹ️ Status:", 
-             font=('TkDefaultFont', 9, 'bold')).grid(row=0, column=0, sticky="w", padx=(8, 4))
+             font=Fonts.BODY_SMALL_BOLD).grid(row=0, column=0, sticky="w", padx=(8, 4))
     app.eeprom_status_label = ttk.Label(status_frame, text="Ready - Click 'Read EEPROM' to load data", 
-                                       font=('TkDefaultFont', 9),
+                                       font=Fonts.BODY_SMALL,
                                        foreground='#555')
     app.eeprom_status_label.grid(row=0, column=1, sticky="ew")
 
@@ -350,8 +341,8 @@ def read_eeprom_data(app):
         return
     
     try:
-        app.eeprom_status_label.config(text="🔄 Reading EEPROM data via AVS_GetParameter...", 
-                                      foreground='blue')
+        app.eeprom_status_label.config(text="Reading EEPROM data via AVS_GetParameter...", 
+                                      foreground=Colors.ACCENT)
         app.update_idletasks()
         
         # ============ READ ACTUAL EEPROM DATA VIA AVS_GetParameter ============
@@ -486,18 +477,18 @@ def read_eeprom_data(app):
             f"  • Serial Number: {serial_number}\n"
             f"  • Detector: {detector_name}\n"
             f"  • Structure Version: {struct_version}\n\n"
-            f"🔲 Pixel Configuration:\n"
+            f"Pixel Configuration:\n"
             f"  • Total Pixels: {total_pixels}\n"
             f"  • Effective Range: [{start_pixel} - {stop_pixel}]\n"
             f"  • Optical Black (L/R): {obp_left} / {obp_right}\n"
             f"  • Defective Pixels: {len(defective_pixels)}\n\n"
-            f"📊 Gain and Offset:\n"
+            f"Gain and Offset:\n"
             f"  • Gain[0]: {gain_0:.6f}\n"
             f"  • Gain[1]: {gain_1:.6f}\n"
             f"  • Offset[0]: {offset_0:.6f}\n"
             f"  • Offset[1]: {offset_1:.6f}\n"
             f"  • Extended Offset: {ext_offset:.6f}\n\n"
-            f"📐 Wavelength Calibration:\n"
+            f"Wavelength Calibration:\n"
         )
         
         for i, coef in enumerate(wl_coefficients):
@@ -509,7 +500,7 @@ def read_eeprom_data(app):
         
     except Exception as e:
         app.eeprom_status_label.config(text=f"❌ Error reading EEPROM: {str(e)}", 
-                                      foreground='red')
+                                      foreground=Colors.DANGER)
         messagebox.showerror("EEPROM Error", 
                            f"Error reading EEPROM data:\n\n{str(e)}\n\n"
                            f"Please check spectrometer connection.")
@@ -561,7 +552,7 @@ def save_defective_pixels_to_eeprom(app):
         
         # Confirm with user before writing to EEPROM
         confirm_msg = (
-            f"⚠️ WARNING: Permanently Modify EEPROM\n\n"
+            f"WARNING: Permanently Modify EEPROM\n\n"
             f"You are about to write {len(defective_pixels)} defective pixel(s) to EEPROM:\n"
             f"{', '.join(map(str, defective_pixels)) if defective_pixels else 'None (all entries will be 65535)'}\n\n"
             f"This will PERMANENTLY modify the spectrometer's EEPROM memory!\n\n"
@@ -583,7 +574,7 @@ def save_defective_pixels_to_eeprom(app):
         
         # Write to EEPROM using AVS_SetParameter
         app.eeprom_status_label.config(text="💾 Writing to EEPROM...", 
-                                      foreground='blue')
+                                      foreground=Colors.ACCENT)
         app.update_idletasks()
         
         from ctypes import byref
@@ -616,7 +607,7 @@ def save_defective_pixels_to_eeprom(app):
         
     except Exception as e:
         app.eeprom_status_label.config(text=f"❌ Error saving to EEPROM: {str(e)}", 
-                                      foreground='red')
+                                      foreground=Colors.DANGER)
         messagebox.showerror("EEPROM Write Error", 
                            f"Error writing to EEPROM:\n\n{str(e)}\n\n"
                            f"The EEPROM has NOT been modified.")
@@ -651,7 +642,7 @@ def save_gain_offset_to_eeprom(app):
         
         # Confirm with user before writing to EEPROM
         confirm_msg = (
-            f"⚠️ WARNING: Permanently Modify EEPROM\n\n"
+            f"WARNING: Permanently Modify EEPROM\n\n"
             f"You are about to write the following Gain/Offset values to EEPROM:\n\n"
             f"Gain[0]: {gain_0:.8f}\n"
             f"Gain[1]: {gain_1:.8f}\n"
@@ -677,7 +668,7 @@ def save_gain_offset_to_eeprom(app):
         
         # Write to EEPROM using AVS_SetParameter
         app.eeprom_status_label.config(text="💾 Writing Gain/Offset to EEPROM...", 
-                                      foreground='blue')
+                                      foreground=Colors.ACCENT)
         app.update_idletasks()
         
         from ctypes import byref
@@ -713,7 +704,7 @@ def save_gain_offset_to_eeprom(app):
         
     except Exception as e:
         app.eeprom_status_label.config(text=f"❌ Error saving Gain/Offset: {str(e)}", 
-                                      foreground='red')
+                                      foreground=Colors.DANGER)
         messagebox.showerror("EEPROM Write Error", 
                            f"Error writing Gain/Offset to EEPROM:\n\n{str(e)}\n\n"
                            f"The EEPROM has NOT been modified.")
