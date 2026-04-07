@@ -1,19 +1,6 @@
-# AllSpec-Scilab
+# Scilab-V3.2
 
 This folder contains the trimmed Windows-ready app bundle.
-
-Included:
-- GUI app code
-- Spectrometer backends for Ava1, Hama2, Hama3, and Hama4
-- Required packaged DLL files already present in this repo
-- App icons/assets
-
-Left out on purpose:
-- old measurement output
-- characterization result folders
-- virtual environments
-- cache files
-- old vendor archive folders that are not used by the current app
 
 ## Windows setup
 
