@@ -36,23 +36,78 @@ if __platform_system == 'Windows':
         dll_name = 'dcamapi.dll'
     current_file_dir = os.path.dirname(os.path.abspath(__file__)) #Path of the current file
     if getattr(sys, 'frozen', False):
-        #when running from a compiled package (.exe), __file__ returns something like this:
-        # C:\Blick\bin\library.zip\spectrometers\spec_hama2\Hamamatsu_DCAMSDK4_v25056964\
-        # so is needed to replace \bin\library.zip\ to \src\ to have the correct path:
-        # C:\Blick\src\spectrometers\spec_hama2\Hamamatsu_DCAMSDK4_v25056964\
         current_file_dir = current_file_dir.replace('bin\\library.zip\\', 'src\\')
-    # move from the current file dir to the dll folder
-    # e.g. from C:\Blick\src\spectrometers\spec_hama2\Hamamatsu_DCAMSDK4_v25056964\
-    # to C:\Blick\lib\oslib\spec_hama2\Hamamatsu_DCAMSDK4_v25056964\<dll_folder>\<dll_name>
-    install_dir = os.path.abspath(os.path.join(current_file_dir, '..', '..', '..', '..')) #C:\Blick\
-    dll_path = os.path.join(install_dir, 'lib', 'oslib', 'spec_hama2', 'DCAM_API_for_Windows_v25.8.7018a', dll_folder, dll_name)
-    print("Loading DLL from path: " + str(dll_path))
-    try:
-        __dll = windll.LoadLibrary(dll_path)
-    except Exception as e:
+    install_dir = os.path.abspath(os.path.join(current_file_dir, '..', '..', '..', '..'))
+    candidate_paths = []
+
+    env_dll_path = os.environ.get('DCAMAPI_DLL_PATH')
+    if env_dll_path:
+        candidate_paths.append(env_dll_path)
+
+    parent_dir = current_file_dir
+    for _ in range(4):
+        candidate_paths.append(os.path.join(parent_dir, dll_name))
+        next_parent = os.path.dirname(parent_dir)
+        if next_parent == parent_dir:
+            break
+        parent_dir = next_parent
+
+    candidate_paths.append(
+        os.path.join(install_dir, 'lib', 'oslib', 'spec_hama2', 'DCAM_API_for_Windows_v25.8.7018a', dll_folder, dll_name)
+    )
+    candidate_paths.append(
+        os.path.join(current_file_dir, 'DCAM_API_for_Windows_v25.8.7018a', dll_folder, dll_name)
+    )
+
+    user_home = os.path.expanduser('~')
+    candidate_paths.append(
+        os.path.join(user_home, 'Downloads', 'oslib', 'oslib', 'spec_hama2', 'DCAM_API_for_Windows_v25.8.7018a', dll_folder, dll_name)
+    )
+    candidate_paths.append(
+        os.path.join(user_home, 'Downloads', 'DCAMAPI', 'usb', 'Win', 'x64' if dll_folder == 'WinX64' else 'x86', dll_name)
+    )
+
+    for prog_files_env in ('ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432'):
+        prog_files = os.environ.get(prog_files_env)
+        if prog_files:
+            candidate_paths.append(os.path.join(prog_files, 'Hamamatsu', 'DCAM-API', 'modules', dll_name))
+            candidate_paths.append(os.path.join(prog_files, 'Hamamatsu', 'DCAM-API', dll_name))
+            candidate_paths.append(os.path.join(prog_files, 'Hamamatsu', 'DCAMAPI', 'modules', dll_name))
+            candidate_paths.append(os.path.join(prog_files, 'Hamamatsu', 'DCAMAPI', dll_name))
+
+    windir = os.environ.get('WINDIR', r'C:\Windows')
+    candidate_paths.append(os.path.join(windir, 'System32', dll_name))
+    candidate_paths.append(dll_name)
+
+    __dll = None
+    load_errors = []
+    seen = set()
+    for dll_path in candidate_paths:
+        if not dll_path or dll_path in seen:
+            continue
+        seen.add(dll_path)
+        if os.path.isabs(dll_path) and not os.path.exists(dll_path):
+            load_errors.append('missing: {}'.format(dll_path))
+            continue
+        try:
+            if os.path.isabs(dll_path) and hasattr(os, 'add_dll_directory'):
+                os.add_dll_directory(os.path.dirname(dll_path))
+            print("Loading DLL from path: " + str(dll_path))
+            __dll = windll.LoadLibrary(dll_path)
+            break
+        except Exception as e:
+            load_errors.append('{} -> {}'.format(dll_path, e))
+
+    if __dll is None:
         with open('dcamapi_error.log', 'w') as f:
-            f.write("Cannot load dll from path: " + str(dll_path) + "error: "+ str(e) + "\n")
-        raise
+            f.write("Cannot load DCAM DLL. Tried candidates:\n")
+            for entry in load_errors:
+                f.write("- {}\n".format(entry))
+        raise FileNotFoundError(
+            "Unable to load '{}' (or one of its dependencies). Install Hamamatsu DCAM-API "
+            "or set DCAMAPI_DLL_PATH to the full dcamapi.dll path. "
+            "See dcamapi_error.log for attempted paths.".format(dll_name)
+        )
 else:  # Linux
     __dll = cdll.LoadLibrary('/usr/local/lib/libdcamapi.so')
 

@@ -14,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DLLS_DIR = PROJECT_ROOT / "spectrometers dll files"
-SPECTROMETER_TYPE_OPTIONS = ["Auto", "Ava1", "Hama2", "Hama3", "Hama4"]
+SPECTROMETER_TYPE_OPTIONS = ["Auto", "Ava1", "Hama2", "Hama3", "Hama4", "MiniSpec"]
 
 
 def normalize_spec_type(spec_type: Optional[str]) -> str:
@@ -37,6 +37,8 @@ def infer_spec_type_from_dll_path(dll_path: Optional[str]) -> Optional[str]:
         return "Hama4"
     if name == "dcamapi.dll":
         return "Hama2"
+    if name == "dcamusb.dll":
+        return "MiniSpec"
     return None
 
 
@@ -46,6 +48,7 @@ def suggest_default_dll_path(spec_type: Optional[str]) -> str:
         "Ava1": DLLS_DIR / "avaspecx64.dll",
         "Hama3": DLLS_DIR / "DcIcUSB.dll",
         "Hama4": DLLS_DIR / "HiasApi.dll",
+        "MiniSpec": DLLS_DIR / "DCamUSB.dll",
     }
     path = suggestions.get(normalized)
     return str(path.resolve()) if path and path.exists() else ""
@@ -83,7 +86,7 @@ def _candidate_types(spec_type: Optional[str], dll_path: Optional[str]) -> List[
     inferred = infer_spec_type_from_dll_path(dll_path)
     if inferred:
         return [inferred]
-    return ["Ava1", "Hama4", "Hama3", "Hama2"]
+    return ["Ava1", "Hama4", "Hama3", "Hama2", "MiniSpec"]
 
 
 def _candidate_dll_path(candidate: str, requested_type: Optional[str], dll_path: Optional[str]) -> str:
@@ -106,6 +109,7 @@ def _prepare_hama2_import(dll_path: Optional[str]) -> None:
         "dcamapi4",
         "spectrometers.hama2_spectrometer",
         "spectrometers.spec_hama2.Hamamatsu_DCAMSDK4_v25056964.dcam",
+        "spectrometers.spec_hama2.Hamamatsu_DCAMSDK4_v25056964.dcamapi4",
     ]:
         sys.modules.pop(module_name, None)
 
@@ -125,6 +129,9 @@ def _import_backend_class(spec_type: str, dll_path: Optional[str] = None):
     if normalized == "Hama4":
         module = importlib.import_module("spectrometers.hama4_spectrometer")
         return module.Hama4_Spectrometer
+    if normalized == "MiniSpec":
+        module = importlib.import_module("spectrometers.minispec_spectrometer")
+        return module.MiniSpec_Spectrometer
     raise ValueError(f"Unsupported spectrometer type '{spec_type}'.")
 
 
@@ -272,6 +279,38 @@ def _discover_hama4(dll_path: Optional[str]) -> List[Dict[str, str]]:
     return devices
 
 
+def _discover_minispec(dll_path: Optional[str]) -> List[Dict[str, str]]:
+    spec = _new_spec_instance("MiniSpec", dll_path, serial=None, debug_mode=0)
+    if not getattr(spec, "dll_path", ""):
+        raise RuntimeError("MiniSpec requires a valid DCamUSB.dll path.")
+    if not Path(spec.dll_path).is_file():
+        raise RuntimeError(f"MiniSpec dll not found: {spec.dll_path}")
+
+    res = spec.load_spec_dll()
+    if res != "OK":
+        raise RuntimeError(res)
+    res = spec.initialize_dll()
+    if res != "OK":
+        raise RuntimeError(res)
+    res, count = spec.get_number_of_devices()
+    if res != "OK":
+        raise RuntimeError(res)
+    if count == 0:
+        return []
+    res, devices_info = spec.get_all_devices_info(count)
+    if res != "OK":
+        raise RuntimeError(res)
+
+    devices = []
+    for index, dev_info in devices_info.items():
+        serial_number = _clean_text(dev_info.get("id", "")) or f"MiniSpec-{index + 1}"
+        model = _clean_text(dev_info.get("model", "Hamamatsu MiniSpec"))
+        devices.append(
+            {"serial": serial_number, "label": f"{serial_number} ({model}) [MiniSpec]", "type": "MiniSpec"}
+        )
+    return devices
+
+
 def _discover_for_type(spec_type: str, dll_path: Optional[str]) -> List[Dict[str, str]]:
     normalized = normalize_spec_type(spec_type)
     if normalized == "Ava1":
@@ -282,6 +321,8 @@ def _discover_for_type(spec_type: str, dll_path: Optional[str]) -> List[Dict[str
         return _discover_hama3(dll_path)
     if normalized == "Hama4":
         return _discover_hama4(dll_path)
+    if normalized == "MiniSpec":
+        return _discover_minispec(dll_path)
     raise ValueError(f"Unsupported spectrometer type '{spec_type}'.")
 
 

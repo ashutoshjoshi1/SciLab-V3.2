@@ -1019,7 +1019,13 @@ class Hama2_Spectrometer():
                 self.logger.info(self.spec_type+" dll initialized successfully.")
                 spec_dll_initialized=True
             else:
-                res="Could not initialize "+self.spec_type+" dll: "+res
+                if "-2147483130" in res or "NOCAMERA" in res.upper():
+                    res=("No Hamamatsu camera detected (DCAMERR.NOCAMERA). "
+                         "Check USB cable, camera power, and that the Hamamatsu "
+                         "DCAM-API USB driver is installed (Device Manager should "
+                         "list the camera, not an 'Unknown device').")
+                else:
+                    res="Could not initialize "+self.spec_type+" dll: "+res
                 self.logger.error(res)
         else:
             self.logger.info(self.spec_type+" dll already initialized.")

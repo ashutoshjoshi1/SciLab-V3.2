@@ -264,7 +264,7 @@ def build(app):
                 "description": "Fast scan with 405nm and 445nm lasers"
             },
             "Full Spectrum": {
-                "lasers": ["377", "405", "445", "488", "532", "640", "685"],
+                "lasers": ["377", "405", "445", "488", "517", "532", "640", "685", "Hg_Ar"],
                 "reference_files": [],
                 "description": "All lasers, no reference"
             },
