@@ -128,6 +128,25 @@ def build(app):
     app.check_res_start_btn = start_btn
     app.check_res_stop_btn = stop_btn
 
+    # Laser controls — share the BooleanVars created by live_view_tab so
+    # toggling here also reflects in the Live View tab.
+    laser_frame = ttk.LabelFrame(controls_host, text="Laser Controls",
+                                 padding=8)
+    laser_frame.pack(fill="x", padx=4, pady=6)
+
+    laser_tags = ["377", "405", "445", "488", "517", "532", "640", "685", "Hg_Ar"]
+    for tag in laser_tags:
+        var = app.laser_vars.get(tag)
+        if var is None:
+            var = tk.BooleanVar(value=False)
+            app.laser_vars[tag] = var
+        text = "Hg_Ar" if tag == "Hg_Ar" else f"{tag} nm"
+        chk = ttk.Checkbutton(
+            laser_frame, text=text, variable=var,
+            command=lambda t=tag, v=var: app.toggle_laser(t, v.get()),
+        )
+        chk.pack(anchor="w", pady=1)
+
     # Readout
     readout_frame = ttk.LabelFrame(controls_host, text="Fit Readout",
                                    padding=8)
