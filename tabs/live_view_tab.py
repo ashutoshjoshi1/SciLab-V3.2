@@ -127,6 +127,14 @@ def build(app):
         btn.pack(anchor="w", pady=1)
         app.laser_vars["Hg_Ar"] = var
 
+        ttk.Separator(laser_frame, orient="horizontal").pack(fill="x", pady=(6, 4))
+        app.check_spec_btn = ttk.Button(
+            laser_frame,
+            text="Check Spectrometer",
+            command=app.run_check_spectrometer,
+        )
+        app.check_spec_btn.pack(anchor="w", fill="x", pady=(2, 0))
+
         # === Live Control Section ===
         live_control_frame = ttk.LabelFrame(controls_grid, text="Live View Control", padding=8)
         live_control_frame.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)

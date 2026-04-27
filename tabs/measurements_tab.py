@@ -438,17 +438,13 @@ def build(app):
         app.start_analysis_btn = ttk.Button(actions_buttons_frame, text="Analysis",
                                           command=app.refresh_analysis_view, **button_style)
 
-        app.check_spec_btn = ttk.Button(actions_buttons_frame, text="Check Spectrometer",
-                                       command=app.run_check_spectrometer, **button_style)
-
         action_buttons = [
             app.run_all_btn,
             app.stop_all_btn,
             app.save_csv_btn,
             app.start_analysis_btn,
-            app.check_spec_btn,
         ]
-        for col in range(5):
+        for col in range(4):
             actions_buttons_frame.columnconfigure(col, weight=1)
 
         def _layout_quick_controls(panel_width):
