@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -114,7 +114,8 @@ def _fit_peak(
     a = np.asarray(popt, dtype=float)
     y_fit = _mgauss(x_rel, *a)
     rms = float(np.sqrt(np.mean((y - y_fit) ** 2)))
-    resolfit = float(abs(a[2]))
+    # Reported width is 2 × the fitted half-width parameter `w`.
+    resolfit = 2.0 * float(abs(a[2]))
 
     xxi = [
         x_rel[excl_mask],
@@ -226,8 +227,9 @@ class CheckSpectrometerService:
         norm = (signal - bg) / peak_above_bg
 
         # Build plot + persist
-        ts_human = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        ts_compact = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        now_local = datetime.now()
+        ts_human = now_local.strftime("%Y-%m-%d %H:%M:%S")
+        ts_compact = now_local.strftime("%Y%m%dT%H%M%S")
         sn = str(getattr(spec, "sn", "Unknown")).strip() or "Unknown"
 
         plot_path, ddf_path = self._build_plot_and_dump(

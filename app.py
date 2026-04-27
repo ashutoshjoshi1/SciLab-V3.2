@@ -601,20 +601,30 @@ class SpectroApp(tk.Tk):
         self.setup_tab = ttk.Frame(self.nb)
         self.live_tab = ttk.Frame(self.nb)
         self.measure_tab = ttk.Frame(self.nb)
+        self.check_res_tab = ttk.Frame(self.nb)
         self.analysis_tab = ttk.Frame(self.nb)
         self.eeprom_tab = ttk.Frame(self.nb)
 
         self.nb.add(self.setup_tab, text="  Setup  ")
         self.nb.add(self.live_tab, text="  Live View  ")
         self.nb.add(self.measure_tab, text="  Measurements  ")
+        self.nb.add(self.check_res_tab, text="  Check Resolution  ")
         self.nb.add(self.analysis_tab, text="  Analysis  ")
         self.nb.add(self.eeprom_tab, text="  EEPROM  ")
 
-        from tabs import analysis_tab, eeprom_tab, live_view_tab, measurements_tab, setup_tab
+        from tabs import (
+            analysis_tab,
+            check_resolution_tab,
+            eeprom_tab,
+            live_view_tab,
+            measurements_tab,
+            setup_tab,
+        )
 
         setup_tab.build(self)
         live_view_tab.build(self)
         measurements_tab.build(self)
+        check_resolution_tab.build(self)
         analysis_tab.build(self)
         eeprom_tab.build(self)
 
@@ -826,7 +836,6 @@ class SpectroApp(tk.Tk):
                 )
 
                 # Compose summary
-                warn_text = ("\n" + "\n".join(result.warnings)) if result.warnings else ""
                 summary_lines = [
                     "=== Check Spectrometer Results ===",
                     f"  Auto-IT (settled)    : {result.auto_it_ms:.4f} ms",
@@ -848,19 +857,6 @@ class SpectroApp(tk.Tk):
                     self.analysis_summary_lines = summary_lines
                     self._latest_results_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     self.refresh_analysis_view()
-
-                    msg = (
-                        f"Check Spectrometer complete!\n\n"
-                        f"Auto-IT      : {result.auto_it_ms:.4f} ms\n"
-                        f"Measure IT   : 3000.0 ms\n"
-                        f"Center pixel : {result.xcen:.2f}\n"
-                        f"Width        : {result.resolfit:.3f} px\n"
-                        f"Shape (n)    : {result.shape_exponent:.4f}\n"
-                        f"Fit RMS      : {result.rms:.4f}\n"
-                        f"{warn_text}\n\n"
-                        f"Results saved to:\n{output_dir}"
-                    )
-                    messagebox.showinfo("Check Spectrometer", msg)
 
                 self.after(0, _show)
 
