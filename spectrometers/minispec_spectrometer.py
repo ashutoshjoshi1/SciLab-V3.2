@@ -157,6 +157,18 @@ def _augment_minispec_error(msg):
             "This SDK supports C11287-01/C11288-01/C11160/C11165/C11513 only; "
             "older modules (e.g. C10785, TM/TG series) need a different SDK."
         )
+    elif "no driver" in msg.lower():
+        # Windows sees the device at a supported model PID, but DCamUSB.dll
+        # reports no driver — WinUsb .inf is not bound to the device.
+        suffix += (
+            " The device is enumerated but the Hamamatsu WinUsb driver is "
+            "not bound to it. Install the Hamamatsu DCam-USB driver "
+            "(WinUsbDCamIF.inf, shipped with the DCam-USB SDK) on this "
+            "computer: open Device Manager, right-click the Hamamatsu "
+            "entry -> 'Update driver' -> 'Browse my computer' -> point to "
+            "the SDK's driver folder. After install the device should "
+            "appear under 'Hamamatsu USB Camera Module'."
+        )
     return msg + "." + suffix
 
 

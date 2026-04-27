@@ -223,6 +223,15 @@ def _build_offset_curve(
     dispersion_derivative,
     label: Optional[str] = None,
 ) -> OffsetCurve:
+    if values.size == 0:
+        return OffsetCurve(
+            label=label or f"{wavelength_nm:.0f} nm",
+            wavelength_nm=float(wavelength_nm),
+            x_values_nm=np.array([]),
+            y_values=np.array([]),
+            fwhm_nm=0.0,
+            width_20_percent_nm=0.0,
+        )
     disp_nm_per_pixel = float(dispersion_derivative(peak_pixel)) if dispersion_derivative.order >= 0 else 0.0
     center = int(np.nanargmax(values))
     x_values = (np.arange(len(values)) - center) * (disp_nm_per_pixel if disp_nm_per_pixel else 1.0)
@@ -479,6 +488,8 @@ def compute_characterization(
     dispersion_curve_wavelengths = np.polyval(dispersion_coeffs, dispersion_curve_pixels)
 
     def fit_slit_parameters(lsf: np.ndarray, peak_pixel: int, dispersion_nm_per_pixel: float):
+        if lsf.size == 0:
+            return None
         center = len(lsf) // 2
         x_values = (np.arange(len(lsf)) - center) * dispersion_nm_per_pixel
         y_values = lsf - np.min(lsf)

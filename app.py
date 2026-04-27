@@ -780,6 +780,98 @@ class SpectroApp(tk.Tk):
         LOGGER.info("Analysis complete. %d plots generated to: %s", len(paths), plots_dir)
         return paths
 
+    # ------------------------------------------------------------------
+    # Check Spectrometer
+    # ------------------------------------------------------------------
+
+    def run_check_spectrometer(self) -> None:
+        """Launch Check Spectrometer in a background thread."""
+        if not self.spec:
+            messagebox.showwarning("Check Spectrometer", "No spectrometer connected.")
+            return
+        if self.measure_running.is_set():
+            messagebox.showwarning(
+                "Check Spectrometer", "A measurement is already running. Please stop it first."
+            )
+            return
+
+        btn = getattr(self, "check_spec_btn", None)
+        if btn:
+            btn.configure(state="disabled")
+
+        def _run():
+            try:
+                from services.check_spectrometer_service import CheckSpectrometerService
+
+                output_dir = self._ensure_results_dir()
+                sn = _clean_text(self.data.serial_number or self.sn or "Unknown")
+                instrument_name = _clean_text(
+                    getattr(self.spec, "name", "") or getattr(self.spec, "sn", "") or sn
+                )
+                location = _clean_text(getattr(self, "location", "") or "")
+
+                service = CheckSpectrometerService(
+                    output_dir=output_dir,
+                    instrument_name=instrument_name,
+                    location=location,
+                )
+                result = service.run(self.spec)
+
+                # Build an AnalysisArtifact so the standard display path works
+                from analysis.models import AnalysisArtifact
+
+                artifact = AnalysisArtifact(
+                    name="Check Spectrometer — Strongest Line Fit",
+                    path=result.plot_path,
+                )
+
+                # Compose summary
+                warn_text = ("\n" + "\n".join(result.warnings)) if result.warnings else ""
+                summary_lines = [
+                    "=== Check Spectrometer Results ===",
+                    f"  Auto-IT (settled)    : {result.auto_it_ms:.4f} ms",
+                    f"  Measure IT           : 3000.0 ms",
+                    f"  Center pixel (xcen)  : {result.xcen:.2f}",
+                    f"  Width (resolfit)     : {result.resolfit:.3f} px",
+                    f"  Shape exponent (n)   : {result.shape_exponent:.4f}",
+                    f"  Fit RMS              : {result.rms:.4f}",
+                    f"  Fit status           : {'OK' if result.fit_err == 0 else 'Iteration limit reached'}",
+                    f"  CSV saved            : {result.csv_path}",
+                    f"  Plot saved           : {result.plot_path}",
+                ] + (result.warnings if result.warnings else [])
+
+                self._latest_results_dir = output_dir
+
+                def _show():
+                    # Inject into the standard analysis display
+                    self.analysis_artifacts = [artifact]
+                    self.analysis_summary_lines = summary_lines
+                    self._latest_results_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    self.refresh_analysis_view()
+
+                    msg = (
+                        f"Check Spectrometer complete!\n\n"
+                        f"Auto-IT      : {result.auto_it_ms:.4f} ms\n"
+                        f"Measure IT   : 3000.0 ms\n"
+                        f"Center pixel : {result.xcen:.2f}\n"
+                        f"Width        : {result.resolfit:.3f} px\n"
+                        f"Shape (n)    : {result.shape_exponent:.4f}\n"
+                        f"Fit RMS      : {result.rms:.4f}\n"
+                        f"{warn_text}\n\n"
+                        f"Results saved to:\n{output_dir}"
+                    )
+                    messagebox.showinfo("Check Spectrometer", msg)
+
+                self.after(0, _show)
+
+            except Exception as exc:
+                self._post_error("Check Spectrometer", exc)
+            finally:
+                if btn:
+                    self.after(0, lambda: btn.configure(state="normal"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def refresh_analysis_view(self):
         """Add a new run tab to the analysis notebook with saved plot previews."""
         if not self.analysis_artifacts:
@@ -1018,18 +1110,20 @@ class SpectroApp(tk.Tk):
                     fontsize=13, fontweight="bold", pad=8,
                 )
 
-                steps = list(getattr(self, "it_history", []))
-                if steps:
-                    st = np.arange(len(steps))
-                    peaks = [value for (_, value) in steps]
-                    its = [value for (value, _) in steps]
-                    self.inset_peak_line.set_data(st, peaks)
-                    self.inset_it_line.set_data(st, its)
-                    self.meas_inset.set_xlim(-0.5, max(0.5, len(st) - 0.5))
-                    self.meas_inset.relim()
-                    self.meas_inset.autoscale_view()
-                    self.meas_inset2.relim()
-                    self.meas_inset2.autoscale_view()
+                # Auto-IT inset is currently disabled; skip inset updates
+                if False and getattr(self, "meas_inset", None) is not None:
+                    steps = list(getattr(self, "it_history", []))
+                    if steps:
+                        st = np.arange(len(steps))
+                        peaks = [value for (_, value) in steps]
+                        its = [value for (value, _) in steps]
+                        self.inset_peak_line.set_data(st, peaks)
+                        self.inset_it_line.set_data(st, its)
+                        self.meas_inset.set_xlim(-0.5, max(0.5, len(st) - 0.5))
+                        self.meas_inset.relim()
+                        self.meas_inset.autoscale_view()
+                        self.meas_inset2.relim()
+                        self.meas_inset2.autoscale_view()
 
                 self.meas_canvas.draw_idle()
             except Exception:

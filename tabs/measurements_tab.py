@@ -143,12 +143,16 @@ def build(app):
         app.meas_ax = app.measure_ax
         app.meas_sig_line = app.measure_line
         app.meas_dark_line = app.measure_dark_line
-        app.meas_inset = app.measure_ax.inset_axes([0.60, 0.55, 0.34, 0.34])
-        app.meas_inset.set_title("Auto-IT", fontsize=8)
-        app.meas_inset.grid(True, alpha=0.25)
-        app.inset_peak_line, = app.meas_inset.plot([], [], color="#d62728", marker="o", label="Peak")
-        app.meas_inset2 = app.meas_inset.twinx()
-        app.inset_it_line, = app.meas_inset2.plot([], [], color="#2ca02c", marker="s", label="IT")
+        # app.meas_inset = app.measure_ax.inset_axes([0.60, 0.55, 0.34, 0.34])
+        # app.meas_inset.set_title("Auto-IT", fontsize=8)
+        # app.meas_inset.grid(True, alpha=0.25)
+        # app.inset_peak_line, = app.meas_inset.plot([], [], color="#d62728", marker="o", label="Peak")
+        # app.meas_inset2 = app.meas_inset.twinx()
+        # app.inset_it_line, = app.meas_inset2.plot([], [], color="#2ca02c", marker="s", label="IT")
+        app.meas_inset = None
+        app.meas_inset2 = None
+        app.inset_peak_line = None
+        app.inset_it_line = None
 
         # Bottom section - responsive, scrollable controls
         controls_host = ttk.Frame(main_frame, relief="flat")
@@ -434,13 +438,17 @@ def build(app):
         app.start_analysis_btn = ttk.Button(actions_buttons_frame, text="Analysis",
                                           command=app.refresh_analysis_view, **button_style)
 
+        app.check_spec_btn = ttk.Button(actions_buttons_frame, text="Check Spectrometer",
+                                       command=app.run_check_spectrometer, **button_style)
+
         action_buttons = [
             app.run_all_btn,
             app.stop_all_btn,
             app.save_csv_btn,
             app.start_analysis_btn,
+            app.check_spec_btn,
         ]
-        for col in range(4):
+        for col in range(5):
             actions_buttons_frame.columnconfigure(col, weight=1)
 
         def _layout_quick_controls(panel_width):
@@ -752,27 +760,23 @@ def build(app):
             app.meas_ax.set_title(title, fontsize=13, fontweight="bold",
                                   pad=8, color="red" if any_sat else "black")
 
-            # inset: Auto-IT step history (peaks & IT)
-            steps = list(getattr(app, "it_history", []))
-            if steps:
-                st = np.arange(len(steps))
-                peaks = [p for (_, p) in steps]
-                its   = [it for (it, _) in steps]  # note order in tuple
-
-                app.meas_inset.set_xlim(-0.5, len(st)-0.5 if len(st) else 0.5)
-                # Update data
-                app.inset_peak_line.set_data(st, peaks)
-                app.inset_it_line.set_data(st, its)
-
-                # Rescale both y-axes
-                app.meas_inset.relim();  app.meas_inset.autoscale_view()
-                app.meas_inset2.relim(); app.meas_inset2.autoscale_view()
-            else:
-                # clear inset
-                app.inset_peak_line.set_data([], [])
-                app.inset_it_line.set_data([], [])
-                app.meas_inset.relim();  app.meas_inset.autoscale_view()
-                app.meas_inset2.relim(); app.meas_inset2.autoscale_view()
+            # inset: Auto-IT step history (peaks & IT) — commented out
+            # if app.meas_inset is not None:
+            #     steps = list(getattr(app, "it_history", []))
+            #     if steps:
+            #         st = np.arange(len(steps))
+            #         peaks = [p for (_, p) in steps]
+            #         its   = [it for (it, _) in steps]
+            #         app.meas_inset.set_xlim(-0.5, len(st)-0.5 if len(st) else 0.5)
+            #         app.inset_peak_line.set_data(st, peaks)
+            #         app.inset_it_line.set_data(st, its)
+            #         app.meas_inset.relim();  app.meas_inset.autoscale_view()
+            #         app.meas_inset2.relim(); app.meas_inset2.autoscale_view()
+            #     else:
+            #         app.inset_peak_line.set_data([], [])
+            #         app.inset_it_line.set_data([], [])
+            #         app.meas_inset.relim();  app.meas_inset.autoscale_view()
+            #         app.meas_inset2.relim(); app.meas_inset2.autoscale_view()
 
             app.meas_canvas.draw_idle()
 
